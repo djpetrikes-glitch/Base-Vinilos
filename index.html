@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.30 — Dj Petrik</title>
+<title>VinylBase v2.32 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -198,6 +198,11 @@
   .track-origin.missing { color: var(--text3); font-size: 10px; cursor: default; }
   .track-origin.own, .track-origin.store { opacity: .85; }
   .track-origin:hover:not(.missing) { opacity: 1; background: var(--bg4); }
+  .track-origin.dup { color: var(--amber); font-weight: 700; font-size: 10px; }
+  .track-dup-list { margin: 2px 0 4px 30px; display: flex; flex-direction: column; gap: 2px; }
+  .track-dup-item { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 10px; color: var(--text2); }
+  .track-dup-item:hover { background: var(--bg3); }
+  .track-dup-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
   /* Kallax */
   .kallax-section { margin-top: 6px; }
@@ -226,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.30</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.32</div>
     </div>
     <div class="nav-section">Biblioteca</div>
     <button class="nav-item active" id="nav-vinilos" onclick="setView('vinilos')">
@@ -379,11 +384,18 @@ async function getRootDir() {
 
 // ─── CARPETA DE MÚSICA (reproducir temas) ──────────────────────────────────────
 let musicDirHandle = null;
-let musicIndex = null; // [{title, artist, album, handle}] leído de las etiquetas ID3
+let musicDirHandle2 = null; // segunda carpeta opcional
+let musicIndex = null; // [{title, artist, album, handle, relPath, complete}] leído de las etiquetas ID3
+let expandedDuplicates = new Set(); // claves "idx-trackIndex" con la lista de duplicados desplegada
 
 function updateMusicDirLabel() {
   const el = document.getElementById('music-dir-name');
   if (el) el.textContent = musicDirHandle ? '📁 ' + musicDirHandle.name : 'Sin carpeta seleccionada';
+}
+
+function updateMusicDir2Label() {
+  const el = document.getElementById('music-dir2-name');
+  if (el) el.textContent = musicDirHandle2 ? '📁 ' + musicDirHandle2.name : 'Sin carpeta seleccionada (opcional)';
 }
 
 async function changeMusicDir() {
@@ -392,6 +404,17 @@ async function changeMusicDir() {
     musicIndex = null;
     showToast('✓ Carpeta de música seleccionada: ' + musicDirHandle.name);
     updateMusicDirLabel();
+  } catch(e) {
+    showToast('⚠ Selección cancelada', true);
+  }
+}
+
+async function changeMusicDir2() {
+  try {
+    musicDirHandle2 = await window.showDirectoryPicker({ mode: 'read' });
+    musicIndex = null;
+    showToast('✓ Segunda carpeta de música seleccionada: ' + musicDirHandle2.name);
+    updateMusicDir2Label();
   } catch(e) {
     showToast('⚠ Selección cancelada', true);
   }
@@ -411,6 +434,15 @@ async function getMusicDir() {
     showToast('⚠ Selección de carpeta cancelada', true);
     return null;
   }
+}
+
+// La segunda carpeta es opcional: solo se usa si ya está elegida, nunca fuerza el selector
+async function getMusicDir2() {
+  if (musicDirHandle2) {
+    const perm = await musicDirHandle2.queryPermission({ mode: 'read' });
+    if (perm === 'granted') return musicDirHandle2;
+  }
+  return null;
 }
 
 function sanitizeFolderName(name) {
@@ -465,6 +497,7 @@ async function ensureMusicIndex() {
   if (musicIndex) return musicIndex;
   const dir = await getMusicDir();
   if (!dir) return null;
+  const dir2 = await getMusicDir2(); // opcional, null si no se ha elegido
 
   showToast('Indexando tu música (leyendo etiquetas)... puede tardar un poco');
   const files = [];
@@ -479,7 +512,8 @@ async function ensureMusicIndex() {
     }
   }
   try {
-    await walk(dir, '');
+    await walk(dir, dir.name);
+    if (dir2) await walk(dir2, dir2.name);
   } catch(e) {
     showToast('⚠ Error leyendo la carpeta de música', true);
     return null;
@@ -526,45 +560,41 @@ function toggleOrigin(relPath, complete) {
   renderView();
 }
 
+function toggleTrackExpand(key) {
+  if (expandedDuplicates.has(key)) expandedDuplicates.delete(key);
+  else expandedDuplicates.add(key);
+  renderView();
+}
+
 // Busca en el índice ya construido (síncrono) — usado para pintar los iconos sin esperar
-function matchTrackInIndex(row, track) {
-  if (!musicIndex || !musicIndex.length) return null;
+function matchAllTracksInIndex(row, track) {
+  if (!musicIndex || !musicIndex.length) return [];
   const artist = g(row, COL.artist);
   const albumTitle = g(row, COL.title);
   const titleNorm = normName(track.title);
   const artistNorm = normName(artist);
   const albumNorm = normName(albumTitle);
 
-  let match = musicIndex.find(e => {
+  const strong = musicIndex.filter(e => {
     const t = normName(e.title);
     if (!t || t !== titleNorm) return false;
     const a = normName(e.artist), al = normName(e.album);
     return (artistNorm && a.includes(artistNorm)) || (albumNorm && al.includes(albumNorm)) || (!artistNorm && !albumNorm);
   });
-  if (!match) {
-    match = musicIndex.find(e => {
-      const t = normName(e.title);
-      return t && titleNorm && (t.includes(titleNorm) || titleNorm.includes(t));
-    });
-  }
-  return match || null;
+  if (strong.length) return strong;
+
+  return musicIndex.filter(e => {
+    const t = normName(e.title);
+    return t && titleNorm && (t.includes(titleNorm) || titleNorm.includes(t));
+  });
 }
 
-async function findAudioFileForTrack(row, track) {
+async function findAudioFileForTrackByName(row, track) {
   const catalog = g(row, COL.catalog);
   const artist = g(row, COL.artist);
   const albumTitle = g(row, COL.title);
   const titleNorm = normName(track.title);
   const posNorm = normName(track.position);
-
-  // 1. Buscar por etiquetas ID3 (más fiable si los mp3 están tageados con Mp3tag/Discogs)
-  await ensureMusicIndex();
-  const match = matchTrackInIndex(row, track);
-  if (match) return match.handle;
-
-  // 2. Si no hay coincidencia por etiquetas, buscar por nombre de archivo/carpeta
-  const musicDir = await getMusicDir();
-  if (!musicDir) return null;
   const folderName = sanitizeFolderName(`(${catalog}) ${artist} - ${albumTitle}`);
   const catalogNorm = normName(catalog);
   const artistNorm = normName(artist);
@@ -578,26 +608,58 @@ async function findAudioFileForTrack(row, track) {
     }
     return null;
   }
-  try {
-    const discFolder = await musicDir.getDirectoryHandle(folderName);
-    const found = await searchInDir(discFolder);
-    if (found) return found;
-  } catch(e) { /* no existe con ese nombre exacto */ }
-  for await (const [name, handle] of musicDir.entries()) {
-    if (handle.kind === 'directory') {
-      const n = normName(name);
-      if ((catalogNorm && n.includes(catalogNorm)) || (artistNorm && n.includes(artistNorm))) {
-        const found = await searchInDir(handle);
-        if (found) return found;
+
+  async function searchRoot(musicDir) {
+    if (!musicDir) return null;
+    try {
+      const discFolder = await musicDir.getDirectoryHandle(folderName);
+      const found = await searchInDir(discFolder);
+      if (found) return found;
+    } catch(e) { /* no existe con ese nombre exacto */ }
+    for await (const [name, handle] of musicDir.entries()) {
+      if (handle.kind === 'directory') {
+        const n = normName(name);
+        if ((catalogNorm && n.includes(catalogNorm)) || (artistNorm && n.includes(artistNorm))) {
+          const found = await searchInDir(handle);
+          if (found) return found;
+        }
       }
     }
+    return await searchInDir(musicDir);
   }
-  return await searchInDir(musicDir);
+
+  const musicDir = await getMusicDir();
+  const found1 = await searchRoot(musicDir);
+  if (found1) return found1;
+  const musicDir2 = await getMusicDir2();
+  return await searchRoot(musicDir2);
 }
 
 async function checkTracksAvailability() {
   await ensureMusicIndex();
   renderView();
+}
+
+async function playFileEntry(entry, label) {
+  try {
+    const file = await entry.handle.getFile();
+    const url = URL.createObjectURL(file);
+    const player = document.getElementById('track-player');
+    if (!player) return;
+    player.src = url;
+    player.style.display = 'block';
+    player.play();
+    const lbl = document.getElementById('now-playing-label');
+    if (lbl) lbl.textContent = '▶ ' + label;
+  } catch(e) {
+    showToast('⚠ Error al reproducir el archivo', true);
+  }
+}
+
+async function playFileEntryByPath(relPath, label) {
+  const entry = musicIndex && musicIndex.find(e => e.relPath === relPath);
+  if (!entry) return;
+  await playFileEntry(entry, label);
 }
 
 async function playTrack(idx, trackIndex) {
@@ -610,9 +672,20 @@ async function playTrack(idx, trackIndex) {
   const track = tracklist[trackIndex];
 
   showToast('Buscando "' + track.title + '"...');
+  await ensureMusicIndex();
+  const matches = matchAllTracksInIndex(row, track);
+  if (matches.length) {
+    const label = track.position + ' — ' + track.title + (matches.length > 1 ? ` (1 de ${matches.length} encontrados)` : '');
+    await playFileEntry(matches[0], label);
+    if (matches.length > 1) showToast(`⚠ Hay ${matches.length} archivos que coinciden con este tema — mira el aviso junto al tema`, true);
+    renderView();
+    return;
+  }
+
+  // Sin coincidencia por etiquetas: probar por nombre de archivo/carpeta
   let fileHandle;
   try {
-    fileHandle = await findAudioFileForTrack(row, track);
+    fileHandle = await findAudioFileForTrackByName(row, track);
   } catch(e) {
     showToast('⚠ Error buscando el archivo', true);
     return;
@@ -796,6 +869,15 @@ function renderView() {
   const prevTableWrap = document.querySelector('.table-wrap');
   const prevScrollTop = prevTableWrap ? prevTableWrap.scrollTop : 0;
 
+  // Guardar estado del reproductor de audio, para no cortar la canción al redibujar
+  const prevPlayer = document.getElementById('track-player');
+  let playerState = null;
+  if (prevPlayer && prevPlayer.src) {
+    playerState = { src: prevPlayer.src, currentTime: prevPlayer.currentTime, paused: prevPlayer.paused };
+  }
+  const prevNowPlaying = document.getElementById('now-playing-label');
+  const nowPlayingText = prevNowPlaying ? prevNowPlaying.textContent : '';
+
   const rows = filtered();
   const sel = selectedRow;
   const isV = view === 'vinilos';
@@ -907,6 +989,19 @@ function renderView() {
   const newTableWrap = document.querySelector('.table-wrap');
   if (newTableWrap) newTableWrap.scrollTop = prevScrollTop;
 
+  // Restaurar el reproductor de audio, para no cortar la canción al redibujar
+  if (playerState) {
+    const newPlayer = document.getElementById('track-player');
+    if (newPlayer) {
+      newPlayer.src = playerState.src;
+      newPlayer.style.display = 'block';
+      newPlayer.currentTime = playerState.currentTime;
+      if (!playerState.paused) newPlayer.play().catch(() => {});
+    }
+    const newNowPlaying = document.getElementById('now-playing-label');
+    if (newNowPlaying) newNowPlaying.textContent = nowPlayingText;
+  }
+
   // Cargar carátula si aún no está en caché (evita que se "borre" al marcar algo)
   if (sel) {
     const relId = g(sel, COL.release_id);
@@ -969,20 +1064,40 @@ function renderDetail(row) {
             ? `<div style="font-size:11px;color:var(--text3)">Sin tracklist en Discogs</div>`
             : `<div class="tracklist">
                 ${tracklist.map((t, ti) => {
-                  const m = musicIndex ? matchTrackInIndex(row, t) : null;
-                  const origin = m ? trackOrigin(m.relPath, m.complete) : null;
-                  const badge = !musicIndex ? ''
-                    : (m
-                        ? `<span class="track-origin ${origin==='propio'?'own':'store'}" title="${origin==='propio'?'Ripeado por ti':'Digital de tienda'} — clic para cambiar" onclick="event.stopPropagation();toggleOrigin('${m.relPath.replace(/'/g,"\\'")}', ${m.complete})">${origin==='propio'?'🎧':'🏪'}</span>`
-                        : `<span class="track-origin missing" title="No encontrado en tu carpeta de música">—</span>`);
+                  const matches = musicIndex ? matchAllTracksInIndex(row, t) : [];
+                  const key = allData.indexOf(row) + '-' + ti;
+                  const expanded = expandedDuplicates.has(key);
+                  let badge = '';
+                  if (musicIndex) {
+                    if (matches.length === 0) {
+                      badge = `<span class="track-origin missing" title="No encontrado en tu carpeta de música">—</span>`;
+                    } else if (matches.length === 1) {
+                      const m = matches[0];
+                      const origin = trackOrigin(m.relPath, m.complete);
+                      badge = `<span class="track-origin ${origin==='propio'?'own':'store'}" title="${origin==='propio'?'Ripeado por ti':'Digital de tienda'} — clic para cambiar" onclick="event.stopPropagation();toggleOrigin('${m.relPath.replace(/'/g,"\\'")}', ${m.complete})">${origin==='propio'?'🎧':'🏪'}</span>`;
+                    } else {
+                      badge = `<span class="track-origin dup" title="Hay ${matches.length} archivos que coinciden — clic para ver">⚠×${matches.length}</span>`;
+                    }
+                  }
+                  const dupList = (matches.length > 1 && expanded) ? `
+                  <div class="track-dup-list">
+                    ${matches.map(m => {
+                      const origin = trackOrigin(m.relPath, m.complete);
+                      const label = (t.position + ' — ' + t.title).replace(/'/g,"\\'");
+                      return `<div class="track-dup-item" onclick="event.stopPropagation();playFileEntryByPath('${m.relPath.replace(/'/g,"\\'")}','${label}')">
+                        <span class="track-origin ${origin==='propio'?'own':'store'}" onclick="event.stopPropagation();toggleOrigin('${m.relPath.replace(/'/g,"\\'")}', ${m.complete})">${origin==='propio'?'🎧':'🏪'}</span>
+                        <span class="track-dup-path" title="${m.relPath}">${m.relPath}</span>
+                      </div>`;
+                    }).join('')}
+                  </div>` : '';
                   return `
-                  <div class="track-row" onclick="playTrack(${allData.indexOf(row)},${ti})">
+                  <div class="track-row" onclick="${matches.length > 1 ? `toggleTrackExpand('${key}')` : `playTrack(${allData.indexOf(row)},${ti})`}">
                     <svg class="track-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                     <span class="track-pos">${t.position}</span>
                     <span class="track-title" title="${t.title}">${t.title}</span>
                     <span class="track-dur">${t.duration || ''}</span>
                     ${badge}
-                  </div>`;
+                  </div>${dupList}`;
                 }).join('')}
               </div>`}
         <audio id="track-player" controls style="width:100%;display:none;margin-top:6px"></audio>
@@ -1154,13 +1269,20 @@ function renderConfig() {
       </div>
       <div class="config-section">
         <h3>Carpeta de música</h3>
-        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Carpeta donde tienes tus mp3/wav ripeados, para poder reproducir los temas al pulsarlos.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Carpetas donde tienes tus mp3/wav ripeados, para poder reproducir los temas al pulsarlos. La app busca en las dos.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
           <button class="btn" onclick="changeMusicDir()">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-            Elegir carpeta de música
+            Elegir carpeta de música 1
           </button>
           <span id="music-dir-name" style="font-size:12px;color:var(--text3);align-self:center"></span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" onclick="changeMusicDir2()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            Elegir carpeta de música 2 (opcional)
+          </button>
+          <span id="music-dir2-name" style="font-size:12px;color:var(--text3);align-self:center"></span>
         </div>
       </div>
       <div class="config-section">
