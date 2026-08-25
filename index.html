@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.20 — Dj Petrik</title>
+<title>VinylBase v2.21 — Dj Petrik</title>
 <style>
   :root {
     --bg: #0f0f0f;
@@ -212,7 +212,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.20</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.21</div>
     </div>
     <div class="nav-section">Biblioteca</div>
     <button class="nav-item active" id="nav-vinilos" onclick="setView('vinilos')">
@@ -309,7 +309,9 @@ const COL = {
   cantidad: 26,
   estado_fisico: 27,
   corte_problema: 28,
-  formato_rip: 29
+  formato_rip: 29,
+  limpio: 30,
+  fecha_limpieza: 31
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -628,7 +630,7 @@ function renderView() {
                   ? '<span class="badge badge-red">✕ Rayado</span>'
                   : (isRipped
                     ? '<span class="badge badge-green">✓ Ripeado</span>'
-                    : '<span class="badge badge-gray">Pendiente</span>')}</td>
+                    : '<span class="badge badge-gray">Pendiente</span>')}${g(r,COL.limpio)==='Sí' ? ' 🧼' : ''}</td>
                 <td>${ripper
                   ? `<span class="avatar ${ripper.toLowerCase().includes('paquillo') ? 'av-paquillo' : 'av-you'}">${ripper.toLowerCase().includes('paquillo') ? 'PQ' : 'DJ'}</span>`
                   : ''}</td>
@@ -707,6 +709,15 @@ function renderDetail(row) {
       </div>
       ${g(row,COL.corte_problema) ? `<div style="margin-top:4px"><span class="badge badge-red" style="font-size:10px">${g(row,COL.estado_fisico)==='Rayado'?'Rayado en':'Salta en'} ${g(row,COL.corte_problema)}</span></div>` : ''}
       ` : ''}
+
+      <div class="d-label" style="margin-top:10px;margin-bottom:4px">Limpieza (ultrasonidos)</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="badge ${g(row,COL.limpio)==='Sí'?'badge-green':'badge-gray'}">${g(row,COL.limpio)==='Sí'?'🧼 Limpio':'Sin limpiar'}</span>
+        ${g(row,COL.limpio)==='Sí' && g(row,COL.fecha_limpieza) ? `<span style="font-size:10px;color:var(--text3)">${g(row,COL.fecha_limpieza)}</span>` : ''}
+      </div>
+      <button class="btn ${g(row,COL.limpio)==='Sí'?'':'btn-accent'}" style="width:100%;justify-content:center;margin-top:6px" onclick="toggleLimpio(${allData.indexOf(row)})">
+        ${g(row,COL.limpio)==='Sí' ? '✕ Marcar sin limpiar' : '🧼 Marcar como limpio'}
+      </button>
 
       <div class="d-label" style="margin:10px 0 4px">Cantidad de copias</div>
       <div style="display:flex;align-items:center;gap:8px">
@@ -927,6 +938,17 @@ function toggleRipped(idx) {
   saveToSheet(idx);
 }
 
+function toggleLimpio(idx) {
+  const row = allData[idx];
+  const isLimpio = g(row, COL.limpio) === 'Sí';
+  row[COL.limpio] = isLimpio ? 'No' : 'Sí';
+  row[COL.fecha_limpieza] = isLimpio ? '' : new Date().toLocaleDateString('es-ES');
+  selectedRow = row;
+  renderView();
+  showToast(isLimpio ? 'Marcado sin limpiar' : '🧼 Marcado como limpio');
+  saveToSheet(idx);
+}
+
 function setField(idx, col, value) {
   allData[idx][col] = String(value);
   selectedRow = allData[idx];
@@ -960,6 +982,8 @@ async function saveToSheet(idx) {
     { col: COL.estado_fisico,  value: row[COL.estado_fisico]  || '' },
     { col: COL.corte_problema, value: row[COL.corte_problema] || '' },
     { col: COL.formato_rip,    value: row[COL.formato_rip]    || '' },
+    { col: COL.limpio,         value: row[COL.limpio]         || '' },
+    { col: COL.fecha_limpieza, value: row[COL.fecha_limpieza] || '' },
   ];
   try {
     const res = await fetch(APPS_SCRIPT_URL, {
