@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.21 — Dj Petrik</title>
+<title>VinylBase v2.22 — Dj Petrik</title>
 <style>
   :root {
     --bg: #0f0f0f;
@@ -212,7 +212,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.21</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.22</div>
     </div>
     <div class="nav-section">Biblioteca</div>
     <button class="nav-item active" id="nav-vinilos" onclick="setView('vinilos')">
@@ -550,6 +550,10 @@ function renderView() {
   if (view === 'config') { renderConfig(); return; }
   if (view === 'sesiones') { renderSesiones(); return; }
 
+  // Guardar posición de scroll de la tabla antes de redibujar
+  const prevTableWrap = document.querySelector('.table-wrap');
+  const prevScrollTop = prevTableWrap ? prevTableWrap.scrollTop : 0;
+
   const rows = filtered();
   const sel = selectedRow;
   const isV = view === 'vinilos';
@@ -655,6 +659,10 @@ function renderView() {
       </div>
       ${sel ? renderDetail(sel) : `<div class="detail"><div class="state-center" style="padding:40px 16px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg><p style="text-align:center;font-size:12px">Selecciona un disco<br>para ver el detalle</p></div></div>`}
     </div>`;
+
+  // Restaurar posición de scroll de la tabla tras redibujar
+  const newTableWrap = document.querySelector('.table-wrap');
+  if (newTableWrap) newTableWrap.scrollTop = prevScrollTop;
 }
 
 function renderDetail(row) {
