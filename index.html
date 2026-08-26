@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.61 — Dj Petrik</title>
+<title>VinylBase v2.63 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.61</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.63</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -835,10 +835,41 @@ function appendRiffChunk(wavArrayBuffer, chunkBytes) {
 
 // Cachea los bytes de la carátula (no solo la URL) para no volver a descargarla por cada tema del mismo disco
 const coverBytesCache = {};
+// Vía alternativa: dibuja la imagen ya cargada (como <img>, sin restricción de CORS
+// para mostrarla) en un lienzo oculto, y saca los bytes de ahí. A veces esquiva el
+// bloqueo de descarga directa; si el servidor bloquea de verdad, esto también falla.
+function tryCoverViaCanvas(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || 500;
+        canvas.height = img.naturalHeight || 500;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => {
+          if (!blob) { resolve(null); return; }
+          blob.arrayBuffer().then(buf => resolve({ bytes: buf, mime: blob.type || 'image/jpeg' })).catch(() => resolve(null));
+        }, 'image/jpeg', 0.92);
+      } catch(e) {
+        resolve(null); // lienzo contaminado: el bloqueo es real, no hay vuelta
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
 async function getCoverBytes(cleanId) {
   if (coverBytesCache[cleanId] !== undefined) return coverBytesCache[cleanId];
   const url = coverCache[cleanId];
-  if (!url) { coverBytesCache[cleanId] = null; return null; }
+  if (!url) {
+    cortadorLogLine(`⚠ No hay carátula cargada para este disco (Discogs no la tiene, o falló al traerla) — se guarda sin carátula.`);
+    coverBytesCache[cleanId] = null;
+    return null;
+  }
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -848,8 +879,14 @@ async function getCoverBytes(cleanId) {
     coverBytesCache[cleanId] = result;
     return result;
   } catch(e) {
-    console.error('No se pudo descargar la carátula para incrustar:', e);
-    cortadorLogLine(`⚠ No se pudo descargar la carátula (${e.message || e}) — probablemente el servidor de imágenes de Discogs bloquea esta descarga desde el navegador (CORS). El resto de etiquetas se guardan igual.`);
+    console.error('Descarga directa de carátula falló, probando por canvas:', e);
+    const viaCanvas = await tryCoverViaCanvas(url);
+    if (viaCanvas) {
+      coverBytesCache[cleanId] = viaCanvas;
+      cortadorLogLine(`✓ Carátula conseguida por la vía alternativa (canvas), la descarga directa falló pero esta sí funcionó.`);
+      return viaCanvas;
+    }
+    cortadorLogLine(`⚠ No se pudo conseguir la carátula por ninguna vía (${e.message || e}) — el servidor de imágenes de Discogs bloquea esto de verdad. El resto de etiquetas se guardan igual.`);
     coverBytesCache[cleanId] = null;
     return null;
   }
@@ -1258,7 +1295,7 @@ function buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec)
 function buildTrackFileName(expTrack, fallbackIndex) {
   const artist = expTrack.row ? g(expTrack.row, COL.artist) : '';
   const title = expTrack.title || '';
-  if (artist && title) return sanitizeFolderName(`(${artist}) - ${title}`);
+  if (artist && title) return sanitizeFolderName(`${artist} - ${title}`);
   if (title) return sanitizeFolderName(title);
   const pos = (expTrack.position || '').trim();
   if (pos) return sanitizeFolderName(pos);
