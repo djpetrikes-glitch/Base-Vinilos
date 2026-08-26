@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.57 — Dj Petrik</title>
+<title>VinylBase v2.59 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.57</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.59</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -737,6 +737,145 @@ function writeWavStr(view, offset, str) {
   for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
 }
 
+// ─── ETIQUETAS ID3v2 + CARÁTULA INCRUSTADAS EN EL WAV ──────────────────────────
+function id3TextFrame(id, text) {
+  const textBytes = new TextEncoder().encode(String(text || ''));
+  const size = 1 + textBytes.length; // 1 byte de codificación + el texto
+  const buf = new Uint8Array(10 + size);
+  const view = new DataView(buf.buffer);
+  writeWavStr(view, 0, id);
+  view.setUint32(4, size, false); // tamaño normal (big-endian) en ID3v2.3, no synchsafe
+  view.setUint16(8, 0, false); // flags
+  buf[10] = 0; // codificación ISO-8859-1
+  buf.set(textBytes, 11);
+  return buf;
+}
+
+function id3TxxxFrame(description, text) {
+  const descBytes = new TextEncoder().encode(description);
+  const textBytes = new TextEncoder().encode(String(text || ''));
+  const size = 1 + descBytes.length + 1 + textBytes.length; // enc + descripción + \0 + valor
+  const buf = new Uint8Array(10 + size);
+  const view = new DataView(buf.buffer);
+  writeWavStr(view, 0, 'TXXX');
+  view.setUint32(4, size, false);
+  view.setUint16(8, 0, false);
+  let off = 10;
+  buf[off++] = 0; // codificación
+  buf.set(descBytes, off); off += descBytes.length;
+  buf[off++] = 0; // fin de la descripción
+  buf.set(textBytes, off);
+  return buf;
+}
+
+function id3ApicFrame(mime, pictureBytes) {
+  const pic = pictureBytes instanceof Uint8Array ? pictureBytes : new Uint8Array(pictureBytes);
+  const mimeBytes = new TextEncoder().encode(mime);
+  const size = 1 + mimeBytes.length + 1 + 1 + 1 + pic.length; // enc+mime+\0+tipo+desc\0+datos
+  const buf = new Uint8Array(10 + size);
+  const view = new DataView(buf.buffer);
+  writeWavStr(view, 0, 'APIC');
+  view.setUint32(4, size, false);
+  view.setUint16(8, 0, false);
+  let off = 10;
+  buf[off++] = 0; // codificación
+  buf.set(mimeBytes, off); off += mimeBytes.length;
+  buf[off++] = 0; // fin del mime type
+  buf[off++] = 3; // tipo de imagen: portada frontal
+  buf[off++] = 0; // descripción vacía + fin
+  buf.set(pic, off);
+  return buf;
+}
+
+function buildId3v2Tag(frames) {
+  let totalSize = 0;
+  for (const f of frames) totalSize += f.length;
+  const header = new Uint8Array(10);
+  writeWavStr(new DataView(header.buffer), 0, 'ID3');
+  header[3] = 3; header[4] = 0; // versión 2.3.0
+  header[5] = 0; // flags
+  // tamaño en formato "synchsafe" (4 bytes, 7 bits útiles cada uno) — así es la cabecera ID3v2
+  header[6] = (totalSize >> 21) & 0x7F;
+  header[7] = (totalSize >> 14) & 0x7F;
+  header[8] = (totalSize >> 7) & 0x7F;
+  header[9] = totalSize & 0x7F;
+  const out = new Uint8Array(10 + totalSize);
+  out.set(header, 0);
+  let off = 10;
+  for (const f of frames) { out.set(f, off); off += f.length; }
+  return out;
+}
+
+function wrapAsRiffChunk(chunkId, bytes) {
+  const padded = bytes.length % 2 === 0 ? bytes : (() => { const p = new Uint8Array(bytes.length + 1); p.set(bytes); return p; })();
+  const out = new Uint8Array(8 + padded.length);
+  const view = new DataView(out.buffer);
+  writeWavStr(view, 0, chunkId);
+  view.setUint32(4, bytes.length, true); // tamaño real del chunk, sin el byte de relleno (RIFF es little-endian)
+  out.set(padded, 8);
+  return out;
+}
+
+// Añade un trozo (chunk) al final de un WAV ya construido, y corrige el tamaño total del RIFF
+function appendRiffChunk(wavArrayBuffer, chunkBytes) {
+  const wavBytes = new Uint8Array(wavArrayBuffer);
+  const out = new Uint8Array(wavBytes.length + chunkBytes.length);
+  out.set(wavBytes, 0);
+  out.set(chunkBytes, wavBytes.length);
+  new DataView(out.buffer).setUint32(4, out.length - 8, true); // offset 4 = tamaño RIFF total - 8
+  return out.buffer;
+}
+
+// Cachea los bytes de la carátula (no solo la URL) para no volver a descargarla por cada tema del mismo disco
+const coverBytesCache = {};
+async function getCoverBytes(cleanId) {
+  if (coverBytesCache[cleanId] !== undefined) return coverBytesCache[cleanId];
+  const url = coverCache[cleanId];
+  if (!url) { coverBytesCache[cleanId] = null; return null; }
+  try {
+    const res = await fetch(url);
+    const buf = await res.arrayBuffer();
+    const mime = res.headers.get('content-type') || 'image/jpeg';
+    const result = { bytes: buf, mime };
+    coverBytesCache[cleanId] = result;
+    return result;
+  } catch(e) {
+    coverBytesCache[cleanId] = null;
+    return null;
+  }
+}
+
+// Construye el WAV final con etiquetas ID3v2 (título, artista, álbum, pista, año, género, sello) y carátula
+async function embedTagsInWav(wavArrayBuffer, expTrack) {
+  const row = expTrack.row;
+  const frames = [];
+  frames.push(id3TextFrame('TIT2', expTrack.title));
+  if (row) {
+    frames.push(id3TextFrame('TPE1', g(row, COL.artist)));
+    frames.push(id3TextFrame('TALB', expTrack.disc));
+    frames.push(id3TextFrame('TRCK', expTrack.position));
+    if (g(row, COL.year)) frames.push(id3TextFrame('TYER', g(row, COL.year)));
+    if (g(row, COL.genre)) frames.push(id3TextFrame('TCON', g(row, COL.genre)));
+    if (g(row, COL.label)) frames.push(id3TextFrame('TPUB', g(row, COL.label)));
+    if (g(row, COL.catalog)) frames.push(id3TxxxFrame('CATALOGNUMBER', g(row, COL.catalog)));
+
+    const releaseId = g(row, COL.release_id);
+    if (releaseId) {
+      const cleanId = releaseId.toString().slice(0, -1);
+      await loadCoverForRow(row); // asegura que coverCache tiene la URL de este disco
+      const cover = await getCoverBytes(cleanId);
+      if (cover) frames.push(id3ApicFrame(cover.mime, cover.bytes));
+    }
+  } else {
+    frames.push(id3TextFrame('TALB', expTrack.disc));
+    frames.push(id3TextFrame('TRCK', expTrack.position));
+  }
+
+  const id3Bytes = buildId3v2Tag(frames);
+  const chunk = wrapAsRiffChunk('id3 ', id3Bytes);
+  return appendRiffChunk(wavArrayBuffer, chunk);
+}
+
 // Segunda pasada de sentido común: un tema demasiado corto probablemente sea un pasaje
 // flojo mal cortado (se fusiona con el vecino); un tema demasiado largo probablemente
 // se haya "tragado" un hueco real (se vuelve a rastrear ahí dentro con más sensibilidad).
@@ -1093,7 +1232,12 @@ async function analyzeCortador() {
     cortadorLogLine('');
   }
 
-  return { buffer, fmt, dataOffset, dataLength, finalSegments };
+  // Solo nos fiamos de "qué tema es cuál" para etiquetar si el número coincide exacto
+  const matchedExpectedTracks = (expectedTracks.length && finalSegments.length === expectedTracks.length)
+    ? expectedTracks
+    : null;
+
+  return { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks };
 }
 
 async function previewCortador() {
@@ -1126,12 +1270,23 @@ async function runCortador() {
   try {
     const result = await analyzeCortador();
     if (!result) { cortadorRunning = false; renderCortador(); return; }
-    const { buffer, fmt, dataOffset, dataLength, finalSegments } = result;
+    const { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks } = result;
+
+    if (matchedExpectedTracks) {
+      cortadorLogLine('🏷 Se incrustarán título, artista, álbum, pista, año, género, sello, referencia de catálogo y carátula (coincide el número de temas con Discogs).');
+    }
 
     cortadorLogLine(`Detectados ${finalSegments.length} temas. Guardando...`);
     for (let i = 0; i < finalSegments.length; i++) {
       const s = finalSegments[i];
-      const wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
+      let wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
+      if (matchedExpectedTracks) {
+        try {
+          wavBuffer = await embedTagsInWav(wavBuffer, matchedExpectedTracks[i]);
+        } catch(e) {
+          console.error('Error incrustando etiquetas:', e);
+        }
+      }
       const outHandle = await cortadorOutDirHandle.getFileHandle(String(i + 1) + '.wav', { create: true });
       const writable = await outHandle.createWritable();
       await writable.write(wavBuffer);
@@ -2362,7 +2517,7 @@ function getCortadorExpectedTracks() {
       // Disco añadido a mano: no hay datos de Discogs, solo sabemos cuántos temas hay
       const discName = entry.title;
       for (let i = 0; i < entry.trackCount; i++) {
-        expected.push({ disc: discName, position: String(i + 1), title: `${discName} — tema ${i + 1}`, durationSec: null });
+        expected.push({ disc: discName, position: String(i + 1), title: `${discName} — tema ${i + 1}`, durationSec: null, row: null });
       }
       continue;
     }
@@ -2371,11 +2526,11 @@ function getCortadorExpectedTracks() {
     const tl = tracklistCache[cleanId];
     if (!tl) continue; // aún no ha llegado de Discogs
     const discTitle = g(entry.row, COL.title);
-    const discTracks = tl.map(t => ({ disc: discTitle, position: t.position, title: t.title, durationSec: parseDiscogsDuration(t.duration) }));
+    const discTracks = tl.map(t => ({ disc: discTitle, position: t.position, title: t.title, durationSec: parseDiscogsDuration(t.duration), row: entry.row }));
     // Si el usuario sabe que hay más temas de los que trae Discogs, rellenar con "duración desconocida"
     if (entry.countOverride && entry.countOverride > discTracks.length) {
       for (let i = discTracks.length; i < entry.countOverride; i++) {
-        discTracks.push({ disc: discTitle, position: String(i + 1), title: `${discTitle} — tema ${i + 1} (no está en Discogs)`, durationSec: null });
+        discTracks.push({ disc: discTitle, position: String(i + 1), title: `${discTitle} — tema ${i + 1} (no está en Discogs)`, durationSec: null, row: entry.row });
       }
     }
     expected.push(...discTracks);
