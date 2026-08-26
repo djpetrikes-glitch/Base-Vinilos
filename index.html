@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.36 — Dj Petrik</title>
+<title>VinylBase v2.37 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.36</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.37</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -783,10 +783,7 @@ function g(row, col) { return (row[col] || '').trim(); }
 function isVinyl(row) {
   const fmt = g(row, COL.format).toLowerCase();
   const fuente = g(row, COL.fuente).toLowerCase();
-  const destDigital = g(row, COL.digital_estado).toLowerCase();
   const isPhysical = fmt.includes('12"') || fmt.includes('7"') || fmt.includes('10"') || fuente === 'discogs';
-  // Si está en Discogs pero tiene digital confirmado, va a Digital
-  if (isPhysical && destDigital === 'confirmado') return false;
   return isPhysical;
 }
 
@@ -801,7 +798,7 @@ function isDigital(row) {
 }
 
 function getVinyls() {
-  return allData.filter(r => isVinyl(r) && !isDigital(r));
+  return allData.filter(r => isVinyl(r));
 }
 
 function getDigital() {
@@ -1591,7 +1588,8 @@ function toggleLimpio(idx) {
 }
 
 function setField(idx, col, value) {
-  allData[idx][col] = String(value);
+  const current = allData[idx][col];
+  allData[idx][col] = current === String(value) ? '' : String(value);
   selectedRow = allData[idx];
   renderView();
   saveToSheet(idx);
@@ -1605,11 +1603,13 @@ function setRipper(idx, who) {
 }
 
 function setDigitalEstado(idx, estado) {
-  allData[idx][COL.digital_estado] = estado;
+  const current = allData[idx][COL.digital_estado];
+  const cleared = current === estado;
+  allData[idx][COL.digital_estado] = cleared ? '' : estado;
   selectedRow = allData[idx];
   renderView();
   saveToSheet(idx);
-  showToast('Estado digital actualizado');
+  showToast(cleared ? 'Estado digital borrado' : 'Estado digital actualizado');
 }
 
 async function postToSheet(row, fields) {
