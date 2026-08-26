@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.32 — Dj Petrik</title>
+<title>VinylBase v2.33 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.32</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.33</div>
     </div>
     <div class="nav-section">Biblioteca</div>
     <button class="nav-item active" id="nav-vinilos" onclick="setView('vinilos')">
@@ -869,6 +869,10 @@ function renderView() {
   const prevTableWrap = document.querySelector('.table-wrap');
   const prevScrollTop = prevTableWrap ? prevTableWrap.scrollTop : 0;
 
+  // Guardar posición de scroll del panel de detalle antes de redibujar
+  const prevDetail = document.querySelector('.detail');
+  const prevDetailScrollTop = prevDetail ? prevDetail.scrollTop : 0;
+
   // Guardar estado del reproductor de audio, para no cortar la canción al redibujar
   const prevPlayer = document.getElementById('track-player');
   let playerState = null;
@@ -988,6 +992,10 @@ function renderView() {
   // Restaurar posición de scroll de la tabla tras redibujar
   const newTableWrap = document.querySelector('.table-wrap');
   if (newTableWrap) newTableWrap.scrollTop = prevScrollTop;
+
+  // Restaurar posición de scroll del panel de detalle tras redibujar
+  const newDetail = document.querySelector('.detail');
+  if (newDetail) newDetail.scrollTop = prevDetailScrollTop;
 
   // Restaurar el reproductor de audio, para no cortar la canción al redibujar
   if (playerState) {
