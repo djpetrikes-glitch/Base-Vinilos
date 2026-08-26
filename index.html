@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.44 — Dj Petrik</title>
+<title>VinylBase v2.46 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.44</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.46</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -560,6 +560,40 @@ let cortadorOutDirHandle = null;
 let cortadorRunning = false;
 let cortadorLog = [];
 
+// Ajustes del cortador — se recuerdan de una vez a otra (localStorage), no solo dentro
+// de esta sesión, para que tocar "Cortar" nunca los borre ni haga falta repetirlos.
+const CORTADOR_SETTINGS_KEY = 'vinylbase_cortador_settings';
+let cortadorSettings = {
+  auto: false,
+  thresholdDb: -25,
+  minSilenceSec: 1.2,
+  minTrackMin: 2.5,
+  maxTrackMin: 8,
+  trimStartSec: 0.3,
+  padEndSec: 1,
+};
+try {
+  const savedCortador = JSON.parse(localStorage.getItem(CORTADOR_SETTINGS_KEY) || 'null');
+  if (savedCortador) cortadorSettings = { ...cortadorSettings, ...savedCortador };
+} catch(e) { /* ignorar si no hay storage */ }
+
+function saveCortadorSettings() {
+  try { localStorage.setItem(CORTADOR_SETTINGS_KEY, JSON.stringify(cortadorSettings)); } catch(e) { /* ignorar */ }
+}
+
+function readCortadorFormIntoSettings() {
+  cortadorSettings = {
+    auto: !!document.getElementById('cortador-auto')?.checked,
+    thresholdDb: parseFloat(document.getElementById('cortador-threshold')?.value || cortadorSettings.thresholdDb),
+    minSilenceSec: parseFloat(document.getElementById('cortador-mingap')?.value || cortadorSettings.minSilenceSec),
+    minTrackMin: parseFloat(document.getElementById('cortador-mintrack')?.value || cortadorSettings.minTrackMin),
+    maxTrackMin: parseFloat(document.getElementById('cortador-maxtrack')?.value || cortadorSettings.maxTrackMin),
+    trimStartSec: parseFloat(document.getElementById('cortador-trimstart')?.value || cortadorSettings.trimStartSec),
+    padEndSec: parseFloat(document.getElementById('cortador-padend')?.value || cortadorSettings.padEndSec),
+  };
+  saveCortadorSettings();
+}
+
 function cortadorLogLine(msg) {
   cortadorLog.push(msg);
   if (view === 'cortador') renderCortador();
@@ -705,21 +739,7 @@ function writeWavStr(view, offset, str) {
 // flojo mal cortado (se fusiona con el vecino); un tema demasiado largo probablemente
 // se haya "tragado" un hueco real (se vuelve a rastrear ahí dentro con más sensibilidad).
 function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, maxTrackSec) {
-  const winSec = windowMs / 1000;
-
-  // Fusionar segmentos demasiado cortos con el siguiente (o el anterior si es el último)
-  let merged = [];
-  for (const seg of segments) {
-    if (merged.length && (seg.endSec - seg.startSec) < minTrackSec) {
-      merged[merged.length - 1] = { startSec: merged[merged.length - 1].startSec, endSec: seg.endSec };
-    } else {
-      merged.push({ ...seg });
-    }
-  }
-  if (merged.length > 1 && (merged[0].endSec - merged[0].startSec) < minTrackSec) {
-    merged[1] = { startSec: merged[0].startSec, endSec: merged[1].endSec };
-    merged.shift();
-  }
+  const merged = mergeShortSegments(segments, minTrackSec);
 
   const notes = [];
   const result = [];
@@ -727,6 +747,39 @@ function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, max
     result.push(...rescueLongSegment(seg, envelope, windowMs, minTrackSec, maxTrackSec, notes));
   }
   return { segments: result, notes };
+}
+
+// Fusiona los trozos demasiado cortos con el vecino MÁS CORTO de los dos (el anterior o
+// el siguiente) — normalmente es la otra mitad de la misma canción mal cortada, no el
+// tema de al lado (que suele durar más). Si solo hay un vecino posible, se usa ese.
+function mergeShortSegments(segments, minTrackSec) {
+  let segs = segments.map(s => ({ ...s }));
+  let iterations = 0;
+  while (iterations < 500) {
+    iterations++;
+    let idx = -1;
+    for (let i = 0; i < segs.length; i++) {
+      if ((segs[i].endSec - segs[i].startSec) < minTrackSec) { idx = i; break; }
+    }
+    if (idx === -1) break; // no quedan trozos demasiado cortos
+    if (segs.length === 1) break; // no hay nada con quien fusionar
+
+    const prev = idx > 0 ? segs[idx - 1] : null;
+    const next = idx < segs.length - 1 ? segs[idx + 1] : null;
+    let mergeWithNext;
+    if (!prev) mergeWithNext = true;
+    else if (!next) mergeWithNext = false;
+    else mergeWithNext = (next.endSec - next.startSec) <= (prev.endSec - prev.startSec);
+
+    if (mergeWithNext) {
+      segs[idx] = { startSec: segs[idx].startSec, endSec: next.endSec };
+      segs.splice(idx + 1, 1);
+    } else {
+      segs[idx - 1] = { startSec: prev.startSec, endSec: segs[idx].endSec };
+      segs.splice(idx, 1);
+    }
+  }
+  return segs;
 }
 
 // Dentro de un tramo, busca el punto con menor amplitud media sostenida (ventana de ~1s),
@@ -830,15 +883,16 @@ function fmtDuration(sec) {
 async function runCortador() {
   if (!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) return;
 
-  // Leer TODOS los valores del formulario antes de tocar nada del redibujado,
-  // porque en cuanto renderCortador() se llama, los campos vuelven a su valor de plantilla.
-  const isAuto = document.getElementById('cortador-auto')?.checked;
-  const minSilenceSec = parseFloat(document.getElementById('cortador-mingap')?.value || '1.2');
-  const manualThresholdDb = parseFloat(document.getElementById('cortador-threshold')?.value || '-45');
-  const minTrackMin = parseFloat(document.getElementById('cortador-mintrack')?.value || '2.5');
-  const maxTrackMin = parseFloat(document.getElementById('cortador-maxtrack')?.value || '8');
-  const trimStartSec = parseFloat(document.getElementById('cortador-trimstart')?.value || '0.3');
-  const padEndSec = parseFloat(document.getElementById('cortador-padend')?.value || '1');
+  // Asegurar que se ha capturado el último estado del formulario y guardarlo,
+  // antes de que renderCortador() reconstruya los campos con estos mismos valores.
+  readCortadorFormIntoSettings();
+  const isAuto = cortadorSettings.auto;
+  const minSilenceSec = cortadorSettings.minSilenceSec;
+  const manualThresholdDb = cortadorSettings.thresholdDb;
+  const minTrackMin = cortadorSettings.minTrackMin;
+  const maxTrackMin = cortadorSettings.maxTrackMin;
+  const trimStartSec = cortadorSettings.trimStartSec;
+  const padEndSec = cortadorSettings.padEndSec;
 
   cortadorRunning = true;
   cortadorLog = [];
@@ -1973,18 +2027,19 @@ function renderCortador() {
       <div class="config-section">
         <h3>3. Sensibilidad (opcional, ya viene con valores que funcionan bien)</h3>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--text2)">
-          <label style="display:flex;align-items:center;gap:6px"><input id="cortador-auto" type="checkbox" checked onchange="onCortadorAutoToggle()"> Umbral automático (calculado según el ruido de fondo de cada grabación — recomendado)</label>
-          <label>Umbral de silencio: <input id="cortador-threshold" type="range" min="-60" max="-20" value="-45" step="1" disabled style="vertical-align:middle"> <span id="cortador-threshold-val">-45 dB</span></label>
-          <label>Duración mínima del hueco: <input id="cortador-mingap" type="range" min="0.5" max="3" value="1.2" step="0.1" style="vertical-align:middle"> <span id="cortador-mingap-val">1.2 s</span></label>
+          <label style="display:flex;align-items:center;gap:6px"><input id="cortador-auto" type="checkbox" ${cortadorSettings.auto ? 'checked' : ''} onchange="onCortadorAutoToggle()"> Umbral automático (calculado según el ruido de fondo de cada grabación — recomendado)</label>
+          <label>Umbral de silencio: <input id="cortador-threshold" type="range" min="-60" max="-20" value="${cortadorSettings.thresholdDb}" step="1" ${cortadorSettings.auto ? 'disabled' : ''} oninput="onCortadorFieldChange()" style="vertical-align:middle"> <span id="cortador-threshold-val">${cortadorSettings.thresholdDb} dB</span></label>
+          <label>Duración mínima del hueco: <input id="cortador-mingap" type="range" min="0.5" max="3" value="${cortadorSettings.minSilenceSec}" step="0.1" oninput="onCortadorFieldChange()" style="vertical-align:middle"> <span id="cortador-mingap-val">${cortadorSettings.minSilenceSec} s</span></label>
           <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;padding-top:8px;border-top:1px solid var(--border)">
-            <label style="display:flex;align-items:center;gap:6px">Un tema dura entre <input id="cortador-mintrack" type="number" value="2.5" min="0.5" max="20" step="0.5" style="width:50px"> y <input id="cortador-maxtrack" type="number" value="8" min="1" max="30" step="0.5" style="width:50px"> minutos</label>
+            <label style="display:flex;align-items:center;gap:6px">Un tema dura entre <input id="cortador-mintrack" type="number" value="${cortadorSettings.minTrackMin}" min="0.5" max="20" step="0.5" onchange="onCortadorFieldChange()" style="width:50px"> y <input id="cortador-maxtrack" type="number" value="${cortadorSettings.maxTrackMin}" min="1" max="30" step="0.5" onchange="onCortadorFieldChange()" style="width:50px"> minutos</label>
           </div>
-          <p style="font-size:11px;color:var(--text3);margin-top:-4px">Si un corte sale más corto que el mínimo, se fusiona con el siguiente (era la propia canción). Si sale más largo que el máximo, se vuelve a buscar el hueco que falta ahí dentro.</p>
+          <p style="font-size:11px;color:var(--text3);margin-top:-4px">Si un corte sale más corto que el mínimo, se fusiona con el vecino más corto (era la propia canción). Si sale más largo que el máximo, se vuelve a buscar el hueco que falta ahí dentro.</p>
           <div style="display:flex;gap:16px;flex-wrap:wrap;padding-top:8px;border-top:1px solid var(--border)">
-            <label style="display:flex;align-items:center;gap:6px">Recortar del inicio: <input id="cortador-trimstart" type="number" value="0.3" min="0" max="5" step="0.1" style="width:50px"> s</label>
-            <label style="display:flex;align-items:center;gap:6px">Añadir al final: <input id="cortador-padend" type="number" value="1" min="0" max="5" step="0.1" style="width:50px"> s</label>
+            <label style="display:flex;align-items:center;gap:6px">Recortar del inicio: <input id="cortador-trimstart" type="number" value="${cortadorSettings.trimStartSec}" min="0" max="5" step="0.1" onchange="onCortadorFieldChange()" style="width:50px"> s</label>
+            <label style="display:flex;align-items:center;gap:6px">Añadir al final: <input id="cortador-padend" type="number" value="${cortadorSettings.padEndSec}" min="0" max="5" step="0.1" onchange="onCortadorFieldChange()" style="width:50px"> s</label>
           </div>
           <p style="font-size:11px;color:var(--text3);margin-top:-4px">"Recortar del inicio" salta hacia delante ese tiempo desde donde se detecta sonido, para saltarse el ruido de superficie del surco de entrada antes de que empiece la canción de verdad. Si algún tema empieza sin ese ruido previo, pon 0.</p>
+          <p style="font-size:11px;color:var(--accent)">Estos valores se guardan solos — no hace falta volver a ponerlos cada vez.</p>
         </div>
       </div>
 
@@ -1999,19 +2054,23 @@ function renderCortador() {
         ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
       </div>` : ''}
     </div>`;
-
-  const th = document.getElementById('cortador-threshold');
-  const thVal = document.getElementById('cortador-threshold-val');
-  if (th) th.oninput = () => { thVal.textContent = th.value + ' dB'; };
-  const mg = document.getElementById('cortador-mingap');
-  const mgVal = document.getElementById('cortador-mingap-val');
-  if (mg) mg.oninput = () => { mgVal.textContent = mg.value + ' s'; };
 }
 
 function onCortadorAutoToggle() {
   const auto = document.getElementById('cortador-auto')?.checked;
   const th = document.getElementById('cortador-threshold');
   if (th) th.disabled = auto;
+  readCortadorFormIntoSettings();
+}
+
+function onCortadorFieldChange() {
+  const th = document.getElementById('cortador-threshold');
+  const thVal = document.getElementById('cortador-threshold-val');
+  if (th && thVal) thVal.textContent = th.value + ' dB';
+  const mg = document.getElementById('cortador-mingap');
+  const mgVal = document.getElementById('cortador-mingap-val');
+  if (mg && mgVal) mgVal.textContent = mg.value + ' s';
+  readCortadorFormIntoSettings();
 }
 
 function renderSesiones() {
