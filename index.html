@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.48 — Dj Petrik</title>
+<title>VinylBase v2.50 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.48</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.50</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -559,6 +559,8 @@ let cortadorFileHandle = null;
 let cortadorOutDirHandle = null;
 let cortadorRunning = false;
 let cortadorLog = [];
+let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
+let cortadorDiscSearchQ = '';
 
 // Ajustes del cortador — se recuerdan de una vez a otra (localStorage), no solo dentro
 // de esta sesión, para que tocar "Cortar" nunca los borre ni haga falta repetirlos.
@@ -880,11 +882,9 @@ function fmtDuration(sec) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
-async function runCortador() {
-  if (!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) return;
-
-  // Asegurar que se ha capturado el último estado del formulario y guardarlo,
-  // antes de que renderCortador() reconstruya los campos con estos mismos valores.
+// Analiza el WAV y devuelve los segmentos ya calculados con los márgenes aplicados,
+// SIN escribir ningún archivo. La usan tanto la vista previa como el guardado real.
+async function analyzeCortador() {
   readCortadorFormIntoSettings();
   const isAuto = cortadorSettings.auto;
   const minSilenceSec = cortadorSettings.minSilenceSec;
@@ -894,54 +894,112 @@ async function runCortador() {
   const trimStartSec = cortadorSettings.trimStartSec;
   const padEndSec = cortadorSettings.padEndSec;
 
+  cortadorLogLine('Leyendo el archivo...');
+  const file = await cortadorFileHandle.getFile();
+  const buffer = await file.arrayBuffer();
+
+  cortadorLogLine('Analizando el WAV...');
+  const { fmt, dataOffset, dataLength } = parseWavHeader(buffer);
+  const frameSize = (fmt.bitsPerSample / 8) * fmt.numChannels;
+  const totalDurationSec = dataLength / frameSize / fmt.sampleRate;
+
+  cortadorLogLine('Detectando silencios entre temas...');
+  const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
+  const thresholdDb = isAuto ? computeAdaptiveThresholdDb(envelope, 4) : manualThresholdDb;
+  cortadorLogLine(isAuto ? `Umbral automático calculado: ${thresholdDb.toFixed(1)} dB` : `Umbral manual: ${thresholdDb} dB`);
+  let segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
+
+  if (!segments.length) {
+    cortadorLogLine('⚠ No se detectó ningún tema. Prueba a bajar el umbral de silencio.');
+    return null;
+  }
+
+  const refined = refineSegmentsByDuration(segments, envelope, windowMs, minTrackMin * 60, maxTrackMin * 60);
+  segments = refined.segments;
+  if (refined.notes.length) {
+    cortadorLogLine(`Ajustando por duración esperada (${minTrackMin}-${maxTrackMin} min)...`);
+    refined.notes.forEach(cortadorLogLine);
+  }
+
+  // Aplicar los márgenes de inicio/final a cada segmento, calculando ya el resultado final
+  const finalSegments = segments.map((seg, i) => {
+    const earliestAllowed = i > 0 ? segments[i - 1].endSec + padEndSec : 0;
+    const startTrimmed = Math.max(earliestAllowed, seg.startSec - trimStartSec);
+    const endWithPad = Math.min(totalDurationSec, seg.endSec + padEndSec);
+    return { detectedAt: seg.startSec, startTrimmed, endWithPad };
+  });
+
+  // Si hay discos de la sesión añadidos, comparar contra lo que dice Discogs
+  const expectedTracks = getCortadorExpectedTracks();
+  if (expectedTracks.length) {
+    const expectedTotalSec = expectedTracks.reduce((a, t) => a + t.durationSec, 0);
+    const detectedTotalSec = finalSegments.reduce((a, s) => a + (s.endWithPad - s.startTrimmed), 0);
+    cortadorLogLine('');
+    cortadorLogLine(`📀 Discogs esperaba: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total.`);
+    cortadorLogLine(`   Se han detectado: ${finalSegments.length} temas, ${fmtDuration(detectedTotalSec)} en total.`);
+    if (finalSegments.length !== expectedTracks.length) {
+      cortadorLogLine(`⚠ El número de temas no coincide — puede que sobre o falte algún corte.`);
+    } else {
+      cortadorLogLine('Comparación tema a tema:');
+      finalSegments.forEach((s, i) => {
+        const exp = expectedTracks[i];
+        const detDur = s.endWithPad - s.startTrimmed;
+        const diff = detDur - exp.durationSec;
+        const diffPct = Math.abs(diff) / exp.durationSec;
+        const flag = diffPct > 0.25 ? ' ⚠ revisar' : '';
+        cortadorLogLine(`  ${i+1}. "${exp.title}" — esperado ${fmtDuration(exp.durationSec)}, detectado ${fmtDuration(detDur)}${flag}`);
+      });
+    }
+    cortadorLogLine('');
+  }
+
+  return { buffer, fmt, dataOffset, dataLength, finalSegments };
+}
+
+async function previewCortador() {
+  if (!cortadorFileHandle || cortadorRunning) return;
   cortadorRunning = true;
   cortadorLog = [];
   renderCortador();
   try {
-    cortadorLogLine('Leyendo el archivo...');
-    const file = await cortadorFileHandle.getFile();
-    const buffer = await file.arrayBuffer();
-
-    cortadorLogLine('Analizando el WAV...');
-    const { fmt, dataOffset, dataLength } = parseWavHeader(buffer);
-    const frameSize = (fmt.bitsPerSample / 8) * fmt.numChannels;
-    const totalDurationSec = dataLength / frameSize / fmt.sampleRate;
-
-    cortadorLogLine('Detectando silencios entre temas...');
-    const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
-    const thresholdDb = isAuto ? computeAdaptiveThresholdDb(envelope, 4) : manualThresholdDb;
-    cortadorLogLine(isAuto ? `Umbral automático calculado: ${thresholdDb.toFixed(1)} dB` : `Umbral manual: ${thresholdDb} dB`);
-    let segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
-
-    if (!segments.length) {
-      cortadorLogLine('⚠ No se detectó ningún tema. Prueba a bajar el umbral de silencio.');
-      cortadorRunning = false;
-      renderCortador();
-      return;
+    const result = await analyzeCortador();
+    if (result) {
+      cortadorLogLine(`👁 Vista previa — ${result.finalSegments.length} temas (nada se ha guardado):`);
+      result.finalSegments.forEach((s, i) => {
+        cortadorLogLine(`  ${i + 1}. detectado en ${s.detectedAt.toFixed(2)}s → ${fmtDuration(s.startTrimmed)} a ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
+      });
+      cortadorLogLine('Si te vale, pulsa "Cortar y guardar". Si no, ajusta los parámetros y vuelve a previsualizar.');
     }
+  } catch(e) {
+    console.error(e);
+    cortadorLogLine('⚠ Error: ' + e.message);
+  }
+  cortadorRunning = false;
+  renderCortador();
+}
 
-    const refined = refineSegmentsByDuration(segments, envelope, windowMs, minTrackMin * 60, maxTrackMin * 60);
-    segments = refined.segments;
-    if (refined.notes.length) {
-      cortadorLogLine(`Ajustando por duración esperada (${minTrackMin}-${maxTrackMin} min)...`);
-      refined.notes.forEach(cortadorLogLine);
-    }
+async function runCortador() {
+  if (!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) return;
+  cortadorRunning = true;
+  cortadorLog = [];
+  renderCortador();
+  try {
+    const result = await analyzeCortador();
+    if (!result) { cortadorRunning = false; renderCortador(); return; }
+    const { buffer, fmt, dataOffset, dataLength, finalSegments } = result;
 
-    cortadorLogLine(`Detectados ${segments.length} temas. Guardando...`);
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i];
-      const earliestAllowed = i > 0 ? segments[i - 1].endSec + padEndSec : 0;
-      const startTrimmed = Math.max(earliestAllowed, seg.startSec - trimStartSec);
-      const endWithPad = Math.min(totalDurationSec, seg.endSec + padEndSec);
-      const wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, startTrimmed, endWithPad);
+    cortadorLogLine(`Detectados ${finalSegments.length} temas. Guardando...`);
+    for (let i = 0; i < finalSegments.length; i++) {
+      const s = finalSegments[i];
+      const wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
       const outHandle = await cortadorOutDirHandle.getFileHandle(String(i + 1) + '.wav', { create: true });
       const writable = await outHandle.createWritable();
       await writable.write(wavBuffer);
       await writable.close();
-      cortadorLogLine(`✓ ${i + 1}.wav — detectado en ${seg.startSec.toFixed(2)}s, recortado a ${fmtDuration(startTrimmed)} → ${fmtDuration(endWithPad)} (${fmtDuration(endWithPad - startTrimmed)})`);
+      cortadorLogLine(`✓ ${i + 1}.wav — detectado en ${s.detectedAt.toFixed(2)}s, recortado a ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
     }
-    cortadorLogLine(`✓ Listo. ${segments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
-    showToast(`✓ ${segments.length} temas cortados y guardados`);
+    cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
+    showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
   } catch(e) {
     console.error(e);
     cortadorLogLine('⚠ Error: ' + e.message);
@@ -1998,6 +2056,16 @@ function renderBuscador() {
 // ─── VISTA DEL CORTADOR DE RIPS ─────────────────────────────────────────────────
 function renderCortador() {
   const main = document.getElementById('main-content');
+  const discQ = normName(cortadorDiscSearchQ);
+  const discResults = discQ
+    ? allData.filter(r => (normName(g(r,COL.artist)).includes(discQ) || normName(g(r,COL.title)).includes(discQ) || normName(g(r,COL.catalog)).includes(discQ)) && g(r,COL.release_id)).slice(0, 8)
+    : [];
+  const expectedTracks = getCortadorExpectedTracks();
+  const expectedTotalSec = expectedTracks.reduce((a,t) => a+t.durationSec, 0);
+  const pendingDiscs = cortadorSessionDiscs.filter(e => {
+    const rid = g(e.row, COL.release_id);
+    return !tracklistCache[rid.toString().slice(0,-1)];
+  }).length;
   main.innerHTML = `
     <div class="content-header">
       <div style="font-weight:600">✂️ Cortar rip</div>
@@ -2044,6 +2112,42 @@ function renderCortador() {
         </div>
       </div>
 
+      <div class="config-section">
+        <h3>4. Discos de esta sesión (opcional)</h3>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Añade, en el orden en que los ripeaste, los discos que hay en este WAV. Con sus duraciones de Discogs comparo si lo detectado cuadra, antes de guardar nada.</p>
+        <div class="search-box" style="margin-bottom:8px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input id="cortador-disc-search" placeholder="Busca un disco de tu catálogo..." value="${cortadorDiscSearchQ}" oninput="onCortadorDiscSearch(this.value)">
+        </div>
+        ${discResults.length ? `
+        <div class="tracklist" style="margin-bottom:10px">
+          ${discResults.map(r => `<div class="track-row" onclick="addCortadorSessionDisc(${allData.indexOf(r)})">
+            <span class="track-title" style="white-space:normal">${g(r,COL.artist)} — ${g(r,COL.title)} <span style="color:var(--text3)">(${g(r,COL.catalog)})</span></span>
+          </div>`).join('')}
+        </div>` : ''}
+        ${cortadorSessionDiscs.length ? `
+        <div class="tracklist" style="margin-bottom:8px">
+          ${cortadorSessionDiscs.map((e,i) => {
+            const rid = g(e.row, COL.release_id);
+            const has = !!tracklistCache[rid.toString().slice(0,-1)];
+            return `<div class="track-row">
+              <span class="track-pos">${i+1}</span>
+              <span class="track-title" style="white-space:normal">${g(e.row,COL.artist)} — ${g(e.row,COL.title)}</span>
+              <span style="font-size:10px;color:var(--text3)">${has ? '✓' : 'cargando...'}</span>
+              <span class="track-origin missing" style="cursor:pointer" onclick="removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
+            </div>`;
+          }).join('')}
+        </div>
+        ${pendingDiscs ? `<p style="font-size:11px;color:var(--text3)">Trayendo datos de Discogs de ${pendingDiscs} disco(s)...</p>` : ''}
+        ${expectedTracks.length ? `<p style="font-size:12px;color:var(--accent)">Discogs dice: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total.</p>` : ''}
+        ` : ''}
+      </div>
+
+      <button class="btn" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px"
+        ${(!cortadorFileHandle || cortadorRunning) ? 'disabled' : ''}
+        onclick="previewCortador()">
+        ${cortadorRunning ? 'Procesando...' : '👁 Vista previa (no guarda nada)'}
+      </button>
       <button class="btn btn-accent" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px"
         ${(!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) ? 'disabled' : ''}
         onclick="runCortador()">
@@ -2055,6 +2159,55 @@ function renderCortador() {
         ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
       </div>` : ''}
     </div>`;
+}
+
+// ─── DISCOS DE LA SESIÓN (comparar contra duraciones de Discogs) ──────────────
+function parseDiscogsDuration(str) {
+  const m = /^(\d+):(\d+)$/.exec((str || '').trim());
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function onCortadorDiscSearch(v) {
+  cortadorDiscSearchQ = v;
+  const pos = v.length;
+  renderCortador();
+  requestAnimationFrame(() => {
+    const inp = document.getElementById('cortador-disc-search');
+    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+  });
+}
+
+async function addCortadorSessionDisc(idx) {
+  const row = allData[idx];
+  const releaseId = g(row, COL.release_id);
+  if (!releaseId) { showToast('⚠ Este disco no tiene release_id de Discogs', true); return; }
+  cortadorSessionDiscs.push({ row });
+  cortadorDiscSearchQ = '';
+  renderCortador();
+  await loadCoverForRow(row); // esto ya trae y cachea el tracklist con duraciones
+  renderCortador();
+}
+
+function removeCortadorSessionDisc(i) {
+  cortadorSessionDiscs.splice(i, 1);
+  renderCortador();
+}
+
+// Junta las duraciones esperadas de todos los discos de la sesión, en orden
+function getCortadorExpectedTracks() {
+  const expected = [];
+  for (const entry of cortadorSessionDiscs) {
+    const releaseId = g(entry.row, COL.release_id);
+    const cleanId = releaseId.toString().slice(0, -1);
+    const tl = tracklistCache[cleanId];
+    if (!tl) continue; // aún no ha llegado de Discogs
+    for (const t of tl) {
+      const durSec = parseDiscogsDuration(t.duration);
+      if (durSec) expected.push({ disc: g(entry.row, COL.title), position: t.position, title: t.title, durationSec: durSec });
+    }
+  }
+  return expected;
 }
 
 function onCortadorAutoToggle() {
