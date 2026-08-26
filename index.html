@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.37 — Dj Petrik</title>
+<title>VinylBase v2.38 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.37</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.38</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -357,6 +357,89 @@ let toastTimer = null;
 let saving = false;
 
 
+// ─── RECORDAR CARPETAS ENTRE SESIONES (IndexedDB) ──────────────────────────────
+function openHandleDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('vinylbase-handles', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('dirs');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveDirHandle(key, handle) {
+  try {
+    const db = await openHandleDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('dirs', 'readwrite');
+      tx.objectStore('dirs').put(handle, key);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch(e) { /* si falla, simplemente no se recuerda para la próxima vez */ }
+}
+
+async function loadDirHandle(key) {
+  try {
+    const db = await openHandleDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('dirs', 'readonly');
+      const req = tx.objectStore('dirs').get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch(e) { return null; }
+}
+
+// Al arrancar, recupera las carpetas ya elegidas antes. Si el permiso ya no está
+// concedido (el navegador puede pedir reconfirmarlo), se marca para mostrar
+// un botón de "Reconectar" en vez de tener que volver a elegir la carpeta entera.
+let rootDirGranted = false;
+let musicDirGranted = false;
+let musicDir2Granted = false;
+
+async function restoreDirHandles() {
+  const root = await loadDirHandle('root');
+  if (root) {
+    rootDirHandle = root;
+    rootDirGranted = (await root.queryPermission({ mode: 'readwrite' })) === 'granted';
+  }
+  const m1 = await loadDirHandle('music1');
+  if (m1) {
+    musicDirHandle = m1;
+    musicDirGranted = (await m1.queryPermission({ mode: 'read' })) === 'granted';
+  }
+  const m2 = await loadDirHandle('music2');
+  if (m2) {
+    musicDirHandle2 = m2;
+    musicDir2Granted = (await m2.queryPermission({ mode: 'read' })) === 'granted';
+  }
+}
+
+async function reconnectDir(kind) {
+  const map = {
+    root:   { handle: rootDirHandle,   mode: 'readwrite' },
+    music1: { handle: musicDirHandle,  mode: 'read' },
+    music2: { handle: musicDirHandle2, mode: 'read' },
+  };
+  const { handle, mode } = map[kind];
+  if (!handle) return;
+  try {
+    const perm = await handle.requestPermission({ mode });
+    if (perm === 'granted') {
+      if (kind === 'root') rootDirGranted = true;
+      else if (kind === 'music1') musicDirGranted = true;
+      else musicDir2Granted = true;
+      showToast('✓ Acceso reconectado: ' + handle.name);
+    } else {
+      showToast('⚠ No se concedió acceso', true);
+    }
+  } catch(e) {
+    showToast('⚠ Error reconectando la carpeta', true);
+  }
+  if (view === 'config') renderConfig();
+}
+
 // ─── FILE SYSTEM ACCESS (crear carpetas de ripeo) ──────────────────────────────
 let rootDirHandle = null;
 
@@ -368,6 +451,8 @@ function updateRootDirLabel() {
 async function changeRootDir() {
   try {
     rootDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    rootDirGranted = true;
+    await saveDirHandle('root', rootDirHandle);
     showToast('✓ Carpeta cambiada: ' + rootDirHandle.name);
     updateRootDirLabel();
   } catch(e) {
@@ -382,6 +467,8 @@ async function getRootDir() {
   }
   try {
     rootDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    rootDirGranted = true;
+    await saveDirHandle('root', rootDirHandle);
     showToast('✓ Carpeta principal seleccionada');
     updateRootDirLabel();
     return rootDirHandle;
@@ -410,7 +497,9 @@ function updateMusicDir2Label() {
 async function changeMusicDir() {
   try {
     musicDirHandle = await window.showDirectoryPicker({ mode: 'read' });
+    musicDirGranted = true;
     musicIndex = null;
+    await saveDirHandle('music1', musicDirHandle);
     showToast('✓ Carpeta de Ripeados seleccionada: ' + musicDirHandle.name);
     updateMusicDirLabel();
   } catch(e) {
@@ -421,7 +510,9 @@ async function changeMusicDir() {
 async function changeMusicDir2() {
   try {
     musicDirHandle2 = await window.showDirectoryPicker({ mode: 'read' });
+    musicDir2Granted = true;
     musicIndex = null;
+    await saveDirHandle('music2', musicDirHandle2);
     showToast('✓ Carpeta de Temas Juntos seleccionada: ' + musicDirHandle2.name);
     updateMusicDir2Label();
   } catch(e) {
@@ -436,6 +527,8 @@ async function getMusicDir() {
   }
   try {
     musicDirHandle = await window.showDirectoryPicker({ mode: 'read' });
+    musicDirGranted = true;
+    await saveDirHandle('music1', musicDirHandle);
     showToast('✓ Carpeta de música seleccionada');
     updateMusicDirLabel();
     return musicDirHandle;
@@ -721,6 +814,7 @@ async function playTrack(idx, trackIndex) {
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 async function init() {
+  await restoreDirHandles();
   await loadData();
   renderStats();
   renderView();
@@ -1276,30 +1370,33 @@ function renderConfig() {
       <div class="config-section">
         <h3>Carpeta de ripeo</h3>
         <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Carpeta raíz donde se crean los directorios de cada vinilo.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="btn" onclick="changeRootDir()">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             Cambiar carpeta de ripeo
           </button>
-          <span id="root-dir-name" style="font-size:12px;color:var(--text3);align-self:center"></span>
+          ${rootDirHandle && !rootDirGranted ? `<button class="btn btn-accent" onclick="reconnectDir('root')">🔄 Reconectar</button>` : ''}
+          <span id="root-dir-name" style="font-size:12px;color:var(--text3)">${rootDirHandle ? '📁 ' + rootDirHandle.name + (rootDirGranted ? '' : ' (pulsa Reconectar)') : 'Sin carpeta seleccionada'}</span>
         </div>
       </div>
       <div class="config-section">
         <h3>Tus dos carpetas de música</h3>
         <p style="font-size:12px;color:var(--text2);margin-bottom:8px">La app solo trabaja con estas dos. En "Ripeados" cualquier tema encontrado se marca 🎧 automáticamente — es tuyo seguro.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
           <button class="btn" onclick="changeMusicDir()">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
             Elegir carpeta de Ripeados
           </button>
-          <span id="music-dir-name" style="font-size:12px;color:var(--text3);align-self:center"></span>
+          ${musicDirHandle && !musicDirGranted ? `<button class="btn btn-accent" onclick="reconnectDir('music1')">🔄 Reconectar</button>` : ''}
+          <span id="music-dir-name" style="font-size:12px;color:var(--text3)">${musicDirHandle ? '📁 ' + musicDirHandle.name + (musicDirGranted ? '' : ' (pulsa Reconectar)') : 'Sin carpeta seleccionada'}</span>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="btn" onclick="changeMusicDir2()">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
             Elegir carpeta de Temas Juntos
           </button>
-          <span id="music-dir2-name" style="font-size:12px;color:var(--text3);align-self:center"></span>
+          ${musicDirHandle2 && !musicDir2Granted ? `<button class="btn btn-accent" onclick="reconnectDir('music2')">🔄 Reconectar</button>` : ''}
+          <span id="music-dir2-name" style="font-size:12px;color:var(--text3)">${musicDirHandle2 ? '📁 ' + musicDirHandle2.name + (musicDir2Granted ? '' : ' (pulsa Reconectar)') : 'Sin carpeta seleccionada (opcional)'}</span>
         </div>
       </div>
       <div class="config-section">
