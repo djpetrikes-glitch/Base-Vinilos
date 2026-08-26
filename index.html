@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.59 — Dj Petrik</title>
+<title>VinylBase v2.60 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.59</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.60</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -562,6 +562,11 @@ let cortadorLog = [];
 let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
 let cortadorDiscSearchQ = '';
 
+// Modo de revisión/asociación manual: cuando está activo, se para justo antes de
+// guardar y deja que el usuario diga a mano qué trozo va con qué tema de Discogs.
+let cortadorAssocActive = false;
+let cortadorAssocData = null; // { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments }
+
 // Ajustes del cortador — se recuerdan de una vez a otra (localStorage), no solo dentro
 // de esta sesión, para que tocar "Cortar" nunca los borre ni haga falta repetirlos.
 const CORTADOR_SETTINGS_KEY = 'vinylbase_cortador_settings';
@@ -573,6 +578,7 @@ let cortadorSettings = {
   maxTrackMin: 8,
   trimStartSec: 0.3,
   padEndSec: 1,
+  manualAssoc: false,
 };
 try {
   const savedCortador = JSON.parse(localStorage.getItem(CORTADOR_SETTINGS_KEY) || 'null');
@@ -592,6 +598,7 @@ function readCortadorFormIntoSettings() {
     maxTrackMin: parseFloat(document.getElementById('cortador-maxtrack')?.value || cortadorSettings.maxTrackMin),
     trimStartSec: parseFloat(document.getElementById('cortador-trimstart')?.value || cortadorSettings.trimStartSec),
     padEndSec: parseFloat(document.getElementById('cortador-padend')?.value || cortadorSettings.padEndSec),
+    manualAssoc: !!document.getElementById('cortador-manualassoc')?.checked,
   };
   saveCortadorSettings();
 }
@@ -951,6 +958,49 @@ function reconcileSegmentCount(segments, expectedDurations, logFn) {
   return result;
 }
 
+// Igual que reconcileSegmentCount, pero en vez de devolver los trozos ya fusionados,
+// devuelve para CADA trozo en bruto a qué tema esperado (índice) está asignado, o -1 si
+// se sugiere descartarlo — para poder mostrarlo editable en el modo de revisión manual.
+function computeDefaultAssignments(segments, expectedDurations) {
+  const N = segments.length, M = expectedDurations.length;
+  if (N === 0) return [];
+  if (M === 0) return segments.map(() => -1);
+  if (N <= M) return segments.map((s, i) => i); // uno a uno, en orden, sin descartes
+
+  const INF = Infinity;
+  const dp = Array.from({ length: N + 1 }, () => new Array(M + 1).fill(INF));
+  const choice = Array.from({ length: N + 1 }, () => new Array(M + 1).fill(null));
+  dp[0][0] = 0;
+  for (let i = 1; i <= N; i++) {
+    for (let j = 0; j <= M; j++) {
+      if (dp[i - 1][j] < dp[i][j]) { dp[i][j] = dp[i - 1][j]; choice[i][j] = { type: 'delete' }; }
+      if (j >= 1) {
+        let sumDur = 0;
+        for (let k = i - 1; k >= 0; k--) {
+          sumDur += (segments[k].endSec - segments[k].startSec);
+          const expDur = expectedDurations[j - 1];
+          const durCost = expDur == null ? 0 : Math.abs(sumDur - expDur);
+          const cost = dp[k][j - 1] + durCost;
+          if (cost < dp[i][j]) { dp[i][j] = cost; choice[i][j] = { type: 'assign', from: k }; }
+        }
+      }
+    }
+  }
+  const assignments = new Array(N).fill(-1);
+  let i = N, j = M;
+  while (i > 0) {
+    const c = choice[i][j];
+    if (!c) break;
+    if (c.type === 'delete') { i -= 1; }
+    else {
+      const k = c.from;
+      for (let idx = k; idx < i; idx++) assignments[idx] = j - 1;
+      i = k; j -= 1;
+    }
+  }
+  return assignments;
+}
+
 function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, maxTrackSec, skipShortHandling) {
   const merged = skipShortHandling ? segments.map(s => ({ ...s })) : mergeShortSegments(segments, minTrackSec);
 
@@ -1107,7 +1157,7 @@ function fmtDuration(sec) {
 
 // Analiza el WAV y devuelve los segmentos ya calculados con los márgenes aplicados,
 // SIN escribir ningún archivo. La usan tanto la vista previa como el guardado real.
-async function analyzeCortador() {
+async function analyzeCortadorRaw() {
   readCortadorFormIntoSettings();
   const isAuto = cortadorSettings.auto;
   const minSilenceSec = cortadorSettings.minSilenceSec;
@@ -1188,6 +1238,23 @@ async function analyzeCortador() {
     }
   }
 
+  return { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec };
+}
+
+function buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec) {
+  return segments.map((seg, i) => {
+    const earliestAllowed = i > 0 ? segments[i - 1].endSec + padEndSec : 0;
+    const startTrimmed = Math.max(earliestAllowed, seg.startSec - trimStartSec);
+    const endWithPad = Math.min(totalDurationSec, seg.endSec + padEndSec);
+    return { detectedAt: seg.startSec, startTrimmed, endWithPad };
+  });
+}
+
+async function analyzeCortador() {
+  const raw = await analyzeCortadorRaw();
+  if (!raw) return null;
+  let { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec } = raw;
+
   // Si el número de trozos detectados no coincide con el número real de temas de
   // Discogs, reconciliarlo (fusionando y/o descartando) para encajar con las duraciones reales.
   if (expectedTracksPre.length && segments.length !== expectedTracksPre.length) {
@@ -1197,12 +1264,7 @@ async function analyzeCortador() {
   }
 
   // Aplicar los márgenes de inicio/final a cada segmento, calculando ya el resultado final
-  const finalSegments = segments.map((seg, i) => {
-    const earliestAllowed = i > 0 ? segments[i - 1].endSec + padEndSec : 0;
-    const startTrimmed = Math.max(earliestAllowed, seg.startSec - trimStartSec);
-    const endWithPad = Math.min(totalDurationSec, seg.endSec + padEndSec);
-    return { detectedAt: seg.startSec, startTrimmed, endWithPad };
-  });
+  const finalSegments = buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec);
 
   // Si hay discos de la sesión añadidos, comparar contra lo que dice Discogs
   const expectedTracks = getCortadorExpectedTracks();
@@ -1242,6 +1304,8 @@ async function analyzeCortador() {
 
 async function previewCortador() {
   if (!cortadorFileHandle || cortadorRunning) return;
+  const wantManual = !!document.getElementById('cortador-manualassoc')?.checked;
+  if (wantManual) { await startCortadorAssociation(); return; }
   cortadorRunning = true;
   cortadorLog = [];
   renderCortador();
@@ -1262,8 +1326,110 @@ async function previewCortador() {
   renderCortador();
 }
 
+async function startCortadorAssociation() {
+  if (!cortadorFileHandle || cortadorRunning) return;
+  cortadorRunning = true;
+  cortadorLog = [];
+  renderCortador();
+  try {
+    const raw = await analyzeCortadorRaw();
+    if (!raw) { cortadorRunning = false; renderCortador(); return; }
+    const expectedDurations = raw.expectedTracksPre.map(t => t.durationSec);
+    const assignments = computeDefaultAssignments(raw.segments, expectedDurations);
+    cortadorAssocData = { ...raw, assignments };
+    cortadorAssocActive = true;
+    cortadorLogLine('Sugerencia de asociación calculada. Revísala abajo y corrige lo que haga falta antes de guardar.');
+  } catch(e) {
+    console.error(e);
+    cortadorLogLine('⚠ Error: ' + e.message);
+  }
+  cortadorRunning = false;
+  renderCortador();
+}
+
+function setCortadorAssignment(idx, value) {
+  if (!cortadorAssocData) return;
+  cortadorAssocData.assignments[idx] = parseInt(value, 10);
+  renderCortador();
+}
+
+function cancelCortadorAssociation() {
+  cortadorAssocActive = false;
+  cortadorAssocData = null;
+  renderCortador();
+}
+
+async function confirmCortadorAssociation() {
+  if (!cortadorAssocData || !cortadorOutDirHandle || cortadorRunning) return;
+  cortadorRunning = true;
+  renderCortador();
+  try {
+    const { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments } = cortadorAssocData;
+
+    // Agrupar los trozos en bruto según lo que el usuario ha asociado a mano
+    const groups = {};
+    segments.forEach((seg, i) => {
+      const a = assignments[i];
+      if (a == null || a < 0) return; // descartado
+      if (!groups[a]) groups[a] = [];
+      groups[a].push(seg);
+    });
+
+    const orderedExpIdx = Object.keys(groups).map(Number).sort((a, b) => a - b);
+    if (!orderedExpIdx.length) {
+      cortadorLogLine('⚠ No has asociado ningún trozo a ningún tema — no hay nada que guardar.');
+      cortadorRunning = false;
+      renderCortador();
+      return;
+    }
+    const mergedSegments = orderedExpIdx.map(expIdx => {
+      const group = groups[expIdx].slice().sort((a, b) => a.startSec - b.startSec);
+      return { startSec: group[0].startSec, endSec: group[group.length - 1].endSec };
+    });
+    const matchedTracksInOrder = orderedExpIdx.map(expIdx => expectedTracksPre[expIdx]);
+
+    if (orderedExpIdx.length < expectedTracksPre.length) {
+      cortadorLogLine(`⚠ Quedan ${expectedTracksPre.length - orderedExpIdx.length} tema(s) de Discogs sin ningún trozo asignado — no se guardarán esos.`);
+    }
+
+    const finalSegments = buildFinalSegments(mergedSegments, totalDurationSec, trimStartSec, padEndSec);
+
+    cortadorLogLine(`Guardando ${finalSegments.length} temas según tu asociación...`);
+    const usedNames = new Set();
+    for (let i = 0; i < finalSegments.length; i++) {
+      const s = finalSegments[i];
+      let wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
+      let baseName = String(i + 1);
+      try {
+        wavBuffer = await embedTagsInWav(wavBuffer, matchedTracksInOrder[i]);
+      } catch(e) { console.error('Error incrustando etiquetas:', e); }
+      const pos = (matchedTracksInOrder[i].position || '').trim();
+      if (pos) baseName = sanitizeFolderName(pos);
+      if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1);
+      usedNames.add(baseName);
+      const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
+      const writable = await outHandle.createWritable();
+      await writable.write(wavBuffer);
+      await writable.close();
+      cortadorLogLine(`✓ ${baseName}.wav — ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
+    }
+    cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
+    showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
+    cortadorAssocActive = false;
+    cortadorAssocData = null;
+  } catch(e) {
+    console.error(e);
+    cortadorLogLine('⚠ Error: ' + e.message);
+    showToast('⚠ Error al procesar el WAV', true);
+  }
+  cortadorRunning = false;
+  renderCortador();
+}
+
 async function runCortador() {
   if (!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) return;
+  const wantManual = !!document.getElementById('cortador-manualassoc')?.checked;
+  if (wantManual) { await startCortadorAssociation(); return; }
   cortadorRunning = true;
   cortadorLog = [];
   renderCortador();
@@ -1277,21 +1443,27 @@ async function runCortador() {
     }
 
     cortadorLogLine(`Detectados ${finalSegments.length} temas. Guardando...`);
+    const usedNames = new Set();
     for (let i = 0; i < finalSegments.length; i++) {
       const s = finalSegments[i];
       let wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
+      let baseName = String(i + 1);
       if (matchedExpectedTracks) {
         try {
           wavBuffer = await embedTagsInWav(wavBuffer, matchedExpectedTracks[i]);
         } catch(e) {
           console.error('Error incrustando etiquetas:', e);
         }
+        const pos = (matchedExpectedTracks[i].position || '').trim();
+        if (pos) baseName = sanitizeFolderName(pos);
       }
-      const outHandle = await cortadorOutDirHandle.getFileHandle(String(i + 1) + '.wav', { create: true });
+      if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1); // por si dos posiciones salen iguales
+      usedNames.add(baseName);
+      const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
       const writable = await outHandle.createWritable();
       await writable.write(wavBuffer);
       await writable.close();
-      cortadorLogLine(`✓ ${i + 1}.wav — detectado en ${s.detectedAt.toFixed(2)}s, recortado a ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
+      cortadorLogLine(`✓ ${baseName}.wav — detectado en ${s.detectedAt.toFixed(2)}s, recortado a ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
     }
     cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
     showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
@@ -2350,6 +2522,7 @@ function renderBuscador() {
 
 // ─── VISTA DEL CORTADOR DE RIPS ─────────────────────────────────────────────────
 function renderCortador() {
+  if (cortadorAssocActive) { renderCortadorAssocEditor(); return; }
   const main = document.getElementById('main-content');
   const discQ = normName(cortadorDiscSearchQ);
   const discResults = discQ
@@ -2455,6 +2628,7 @@ function renderCortador() {
         </div>
         ${pendingDiscs ? `<p style="font-size:11px;color:var(--text3)">Trayendo datos de Discogs de ${pendingDiscs} disco(s)...</p>` : ''}
         ${expectedTracks.length ? `<p style="font-size:12px;color:var(--accent)">Discogs dice: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total${expectedUnknownCount ? ` (${expectedUnknownCount} sin duración conocida)` : ''}.</p>` : ''}
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin-top:6px"><input id="cortador-manualassoc" type="checkbox" ${cortadorSettings.manualAssoc ? 'checked' : ''} onchange="onCortadorFieldChange()"> Revisar y asociar yo mismo cada trozo con su tema de Discogs, antes de guardar (en vez de automático)</label>
         ` : ''}
       </div>
 
@@ -2471,6 +2645,60 @@ function renderCortador() {
 
       ${cortadorLog.length ? `
       <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;font-family:monospace;color:var(--text2);max-height:300px;overflow-y:auto">
+        ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
+      </div>` : ''}
+    </div>`;
+}
+
+function renderCortadorAssocEditor() {
+  const main = document.getElementById('main-content');
+  const d = cortadorAssocData;
+  const segments = d.segments;
+  const expected = d.expectedTracksPre;
+  const assignments = d.assignments;
+
+  // Qué índices de temas esperados ya tienen algún trozo asignado, para avisar de los que faltan
+  const usedExpIdx = new Set(assignments.filter(a => a != null && a >= 0));
+  const missingExpected = expected.map((t, i) => i).filter(i => !usedExpIdx.has(i));
+
+  main.innerHTML = `
+    <div class="content-header">
+      <div style="font-weight:600">✂️ Cortar rip — asociación manual</div>
+    </div>
+    <div style="padding:16px;overflow-y:auto;height:calc(100% - 60px);max-width:720px">
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">
+        Para cada trozo detectado, di a qué tema de Discogs corresponde (ya viene con una sugerencia puesta).
+        Si dos trozos apuntan al mismo tema, se fusionan. Si un trozo no corresponde a ningún tema, dile "Descartar".
+      </p>
+
+      ${missingExpected.length ? `
+      <div style="margin-bottom:12px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--warn,#e0a030)">
+        ⚠ Sin ningún trozo asignado todavía: ${missingExpected.map(i => `"${expected[i].title}"`).join(', ')}
+      </div>` : ''}
+
+      <div class="tracklist" style="margin-bottom:14px">
+        ${segments.map((seg, i) => {
+          const dur = seg.endSec - seg.startSec;
+          return `<div class="track-row" style="align-items:center;flex-wrap:wrap">
+            <span class="track-pos" style="min-width:20px">${i+1}</span>
+            <span style="font-size:11px;color:var(--text3);min-width:150px">${fmtDuration(seg.startSec)} a ${fmtDuration(seg.endSec)} (${fmtDuration(dur)})</span>
+            <select onchange="setCortadorAssignment(${i}, this.value)" style="flex:1;min-width:180px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text);font-size:12px">
+              <option value="-1" ${assignments[i] === -1 ? 'selected' : ''}>— Descartar (ruido) —</option>
+              ${expected.map((t, ei) => `<option value="${ei}" ${assignments[i] === ei ? 'selected' : ''}>${t.position ? t.position + ' — ' : ''}${t.title}${t.durationSec != null ? ' (' + fmtDuration(t.durationSec) + ')' : ''}</option>`).join('')}
+            </select>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="cancelCortadorAssociation()">Cancelar</button>
+        <button class="btn btn-accent" style="flex:1;justify-content:center" ${cortadorRunning ? 'disabled' : ''} onclick="confirmCortadorAssociation()">
+          ${cortadorRunning ? 'Guardando...' : '✓ Confirmar asociación y guardar'}
+        </button>
+      </div>
+
+      ${cortadorLog.length ? `
+      <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;font-family:monospace;color:var(--text2);max-height:250px;overflow-y:auto">
         ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
       </div>` : ''}
     </div>`;
