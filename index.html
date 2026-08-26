@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.47 — Dj Petrik</title>
+<title>VinylBase v2.48 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.47</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.48</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -930,7 +930,8 @@ async function runCortador() {
     cortadorLogLine(`Detectados ${segments.length} temas. Guardando...`);
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      const startTrimmed = Math.min(seg.endSec, seg.startSec + trimStartSec);
+      const earliestAllowed = i > 0 ? segments[i - 1].endSec + padEndSec : 0;
+      const startTrimmed = Math.max(earliestAllowed, seg.startSec - trimStartSec);
       const endWithPad = Math.min(totalDurationSec, seg.endSec + padEndSec);
       const wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, startTrimmed, endWithPad);
       const outHandle = await cortadorOutDirHandle.getFileHandle(String(i + 1) + '.wav', { create: true });
@@ -2035,10 +2036,10 @@ function renderCortador() {
           </div>
           <p style="font-size:11px;color:var(--text3);margin-top:-4px">Si un corte sale más corto que el mínimo, se fusiona con el vecino más corto (era la propia canción). Si sale más largo que el máximo, se vuelve a buscar el hueco que falta ahí dentro.</p>
           <div style="display:flex;gap:16px;flex-wrap:wrap;padding-top:8px;border-top:1px solid var(--border)">
-            <label style="display:flex;align-items:center;gap:6px">Recortar del inicio: <input id="cortador-trimstart" type="number" value="${cortadorSettings.trimStartSec}" min="0" max="5" step="0.1" onchange="onCortadorFieldChange()" style="width:50px"> s</label>
+            <label style="display:flex;align-items:center;gap:6px">Margen antes del inicio: <input id="cortador-trimstart" type="number" value="${cortadorSettings.trimStartSec}" min="0" max="5" step="0.1" onchange="onCortadorFieldChange()" style="width:50px"> s</label>
             <label style="display:flex;align-items:center;gap:6px">Añadir al final: <input id="cortador-padend" type="number" value="${cortadorSettings.padEndSec}" min="0" max="5" step="0.1" onchange="onCortadorFieldChange()" style="width:50px"> s</label>
           </div>
-          <p style="font-size:11px;color:var(--text3);margin-top:-4px">"Recortar del inicio" salta hacia delante ese tiempo desde donde se detecta sonido, para saltarse el ruido de superficie del surco de entrada antes de que empiece la canción de verdad. Si algún tema empieza sin ese ruido previo, pon 0.</p>
+          <p style="font-size:11px;color:var(--text3);margin-top:-4px">"Margen antes del inicio" retrocede ese tiempo desde el punto detectado, para no cortar la canción a lo bruto justo en el arranque — deja un pelín del silencio previo, como colchón. Con 0, el archivo empieza exactamente donde se detecta el sonido, sin ningún margen.</p>
           <p style="font-size:11px;color:var(--accent)">Estos valores se guardan solos — no hace falta volver a ponerlos cada vez.</p>
         </div>
       </div>
