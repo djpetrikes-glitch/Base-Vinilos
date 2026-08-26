@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.50 — Dj Petrik</title>
+<title>VinylBase v2.51 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.50</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.51</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -914,10 +914,29 @@ async function analyzeCortador() {
     return null;
   }
 
-  const refined = refineSegmentsByDuration(segments, envelope, windowMs, minTrackMin * 60, maxTrackMin * 60);
+  // Si conocemos duraciones reales de Discogs, ensanchar el rango min/max para que
+  // no fusione ni rescate temas que ya sabemos que son legítimamente cortos o largos.
+  const expectedTracksPre = getCortadorExpectedTracks();
+  let effectiveMinSec = minTrackMin * 60;
+  let effectiveMaxSec = maxTrackMin * 60;
+  if (expectedTracksPre.length) {
+    const durations = expectedTracksPre.map(t => t.durationSec);
+    const minExpected = Math.min(...durations) * 0.85; // un poco de margen
+    const maxExpected = Math.max(...durations) * 1.15;
+    if (minExpected < effectiveMinSec) {
+      cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.min(...durations))} — bajando el mínimo para no fusionarlos.`);
+      effectiveMinSec = minExpected;
+    }
+    if (maxExpected > effectiveMaxSec) {
+      cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.max(...durations))} — subiendo el máximo para no partirlos de más.`);
+      effectiveMaxSec = maxExpected;
+    }
+  }
+
+  const refined = refineSegmentsByDuration(segments, envelope, windowMs, effectiveMinSec, effectiveMaxSec);
   segments = refined.segments;
   if (refined.notes.length) {
-    cortadorLogLine(`Ajustando por duración esperada (${minTrackMin}-${maxTrackMin} min)...`);
+    cortadorLogLine(`Ajustando por duración esperada (${(effectiveMinSec/60).toFixed(1)}-${(effectiveMaxSec/60).toFixed(1)} min)...`);
     refined.notes.forEach(cortadorLogLine);
   }
 
