@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.55 — Dj Petrik</title>
+<title>VinylBase v2.57 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.55</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.57</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -771,7 +771,9 @@ function reconcileSegmentCount(segments, expectedDurations, logFn) {
         let sumDur = 0;
         for (let k = i - 1; k >= 0; k--) {
           sumDur += (segments[k].endSec - segments[k].startSec);
-          const cost = dp[k][j - 1] + Math.abs(sumDur - expectedDurations[j - 1]);
+          const expDur = expectedDurations[j - 1];
+          const durCost = expDur == null ? 0 : Math.abs(sumDur - expDur); // sin dato de Discogs, no penaliza
+          const cost = dp[k][j - 1] + durCost;
           if (cost < dp[i][j]) {
             dp[i][j] = cost;
             choice[i][j] = { type: 'assign', from: k };
@@ -1002,18 +1004,18 @@ async function analyzeCortador() {
   // Si conocemos duraciones reales de Discogs, ensanchar el rango min/max para que
   // no fusione ni rescate temas que ya sabemos que son legítimamente cortos o largos.
   const expectedTracksPre = getCortadorExpectedTracks();
+  const knownDurations = expectedTracksPre.map(t => t.durationSec).filter(d => d != null);
   let effectiveMinSec = minTrackMin * 60;
   let effectiveMaxSec = maxTrackMin * 60;
-  if (expectedTracksPre.length) {
-    const durations = expectedTracksPre.map(t => t.durationSec);
-    const minExpected = Math.min(...durations) * 0.85; // un poco de margen
-    const maxExpected = Math.max(...durations) * 1.15;
+  if (knownDurations.length) {
+    const minExpected = Math.min(...knownDurations) * 0.85; // un poco de margen
+    const maxExpected = Math.max(...knownDurations) * 1.15;
     if (minExpected < effectiveMinSec) {
-      cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.min(...durations))} — bajando el mínimo para no fusionarlos.`);
+      cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.min(...knownDurations))} — bajando el mínimo para no fusionarlos.`);
       effectiveMinSec = minExpected;
     }
     if (maxExpected > effectiveMaxSec) {
-      cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.max(...durations))} — subiendo el máximo para no partirlos de más.`);
+      cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.max(...knownDurations))} — subiendo el máximo para no partirlos de más.`);
       effectiveMaxSec = maxExpected;
     }
   }
@@ -1029,12 +1031,29 @@ async function analyzeCortador() {
     refined.notes.forEach(cortadorLogLine);
   }
 
+  // Si detectamos MENOS trozos de los que dice Discogs, es que se nos ha escapado
+  // algún hueco real — reintentar la detección con más sensibilidad antes de rendirnos.
+  if (expectedTracksPre.length && segments.length < expectedTracksPre.length) {
+    cortadorLogLine(`Se detectaron ${segments.length} trozos pero Discogs dice que hay ${expectedTracksPre.length} temas — reintentando con más sensibilidad...`);
+    for (const marginDb of [6, 9, 12, 16]) {
+      const dbTry = computeAdaptiveThresholdDb(envelope, marginDb);
+      const retry = detectSegments(envelope, windowMs, dbTry, Math.max(0.4, minSilenceSec * 0.4), totalDurationSec);
+      if (retry.length > segments.length) {
+        segments = retry;
+        cortadorLogLine(`   Con más sensibilidad (${dbTry.toFixed(1)}dB) aparecen ${retry.length} trozos.`);
+        if (segments.length >= expectedTracksPre.length) break;
+      }
+    }
+    if (segments.length < expectedTracksPre.length) {
+      cortadorLogLine(`⚠ Aun así siguen faltando temas — puede que algún hueco real sea demasiado débil para detectarlo. Revísalo a mano.`);
+    }
+  }
+
   // Si el número de trozos detectados no coincide con el número real de temas de
-  // Discogs, intentar reconciliarlo fusionando el par que mejor encaje con las
-  // duraciones reales, en vez de conformarnos con lo que salió del paso anterior.
-  if (expectedTracksPre.length && segments.length > expectedTracksPre.length) {
-    const expectedDurations = expectedTracksPre.map(t => t.durationSec);
-    cortadorLogLine(`Se detectaron ${segments.length} trozos pero Discogs dice que hay ${expectedDurations.length} temas — ajustando...`);
+  // Discogs, reconciliarlo (fusionando y/o descartando) para encajar con las duraciones reales.
+  if (expectedTracksPre.length && segments.length !== expectedTracksPre.length) {
+    const expectedDurations = expectedTracksPre.map(t => t.durationSec); // puede tener null
+    cortadorLogLine(`Ajustando ${segments.length} trozos a los ${expectedDurations.length} temas de Discogs...`);
     segments = reconcileSegmentCount(segments, expectedDurations, cortadorLogLine);
   }
 
@@ -1049,10 +1068,10 @@ async function analyzeCortador() {
   // Si hay discos de la sesión añadidos, comparar contra lo que dice Discogs
   const expectedTracks = getCortadorExpectedTracks();
   if (expectedTracks.length) {
-    const expectedTotalSec = expectedTracks.reduce((a, t) => a + t.durationSec, 0);
+    const expectedTotalSec = expectedTracks.reduce((a, t) => a + (t.durationSec || 0), 0);
     const detectedTotalSec = finalSegments.reduce((a, s) => a + (s.endWithPad - s.startTrimmed), 0);
     cortadorLogLine('');
-    cortadorLogLine(`📀 Discogs esperaba: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total.`);
+    cortadorLogLine(`📀 Discogs esperaba: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total (de los que tienen duración en Discogs).`);
     cortadorLogLine(`   Se han detectado: ${finalSegments.length} temas, ${fmtDuration(detectedTotalSec)} en total.`);
     if (finalSegments.length !== expectedTracks.length) {
       cortadorLogLine(`⚠ El número de temas no coincide — puede que sobre o falte algún corte.`);
@@ -1061,10 +1080,14 @@ async function analyzeCortador() {
       finalSegments.forEach((s, i) => {
         const exp = expectedTracks[i];
         const detDur = s.endWithPad - s.startTrimmed;
-        const diff = detDur - exp.durationSec;
-        const diffPct = Math.abs(diff) / exp.durationSec;
-        const flag = diffPct > 0.25 ? ' ⚠ revisar' : '';
-        cortadorLogLine(`  ${i+1}. "${exp.title}" — esperado ${fmtDuration(exp.durationSec)}, detectado ${fmtDuration(detDur)}${flag}`);
+        if (exp.durationSec == null) {
+          cortadorLogLine(`  ${i+1}. "${exp.title}" — Discogs no tiene la duración, detectado ${fmtDuration(detDur)}`);
+        } else {
+          const diff = detDur - exp.durationSec;
+          const diffPct = Math.abs(diff) / exp.durationSec;
+          const flag = diffPct > 0.25 ? ' ⚠ revisar' : '';
+          cortadorLogLine(`  ${i+1}. "${exp.title}" — esperado ${fmtDuration(exp.durationSec)}, detectado ${fmtDuration(detDur)}${flag}`);
+        }
       });
     }
     cortadorLogLine('');
@@ -2178,8 +2201,10 @@ function renderCortador() {
     ? allData.filter(r => (normName(g(r,COL.artist)).includes(discQ) || normName(g(r,COL.title)).includes(discQ) || normName(g(r,COL.catalog)).includes(discQ)) && g(r,COL.release_id)).slice(0, 8)
     : [];
   const expectedTracks = getCortadorExpectedTracks();
-  const expectedTotalSec = expectedTracks.reduce((a,t) => a+t.durationSec, 0);
+  const expectedTotalSec = expectedTracks.reduce((a,t) => a+(t.durationSec||0), 0);
+  const expectedUnknownCount = expectedTracks.filter(t => t.durationSec == null).length;
   const pendingDiscs = cortadorSessionDiscs.filter(e => {
+    if (e.manual) return false;
     const rid = g(e.row, COL.release_id);
     return !tracklistCache[rid.toString().slice(0,-1)];
   }).length;
@@ -2242,21 +2267,39 @@ function renderCortador() {
             <span class="track-title" style="white-space:normal">${g(r,COL.artist)} — ${g(r,COL.title)} <span style="color:var(--text3)">(${g(r,COL.catalog)})</span></span>
           </div>`).join('')}
         </div>` : ''}
+        <details style="margin-bottom:10px">
+          <summary style="font-size:12px;color:var(--text3);cursor:pointer">¿No lo encuentras o no tiene Discogs? Añádelo a mano</summary>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+            <input id="cortador-manual-name" placeholder="Nombre del disco (artista - título)" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px">
+            <input id="cortador-manual-count" type="number" min="1" placeholder="nº temas" style="width:70px">
+            <button class="btn" onclick="addCortadorManualDisc()">Añadir</button>
+          </div>
+        </details>
         ${cortadorSessionDiscs.length ? `
         <div class="tracklist" style="margin-bottom:8px">
           ${cortadorSessionDiscs.map((e,i) => {
+            if (e.manual) {
+              return `<div class="track-row">
+                <span class="track-pos">${i+1}</span>
+                <span class="track-title" style="white-space:normal">${e.title} <span style="color:var(--text3)">(a mano)</span></span>
+                <span style="font-size:10px;color:var(--text3)">${e.trackCount} temas</span>
+                <span class="track-origin missing" style="cursor:pointer" onclick="removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
+              </div>`;
+            }
             const rid = g(e.row, COL.release_id);
-            const has = !!tracklistCache[rid.toString().slice(0,-1)];
+            const tl = tracklistCache[rid.toString().slice(0,-1)];
+            const has = !!tl;
             return `<div class="track-row">
               <span class="track-pos">${i+1}</span>
               <span class="track-title" style="white-space:normal">${g(e.row,COL.artist)} — ${g(e.row,COL.title)}</span>
-              <span style="font-size:10px;color:var(--text3)">${has ? '✓' : 'cargando...'}</span>
+              <span style="font-size:10px;color:var(--text3)">${has ? tl.length+' temas' : 'cargando...'}</span>
+              ${has ? `<label style="font-size:10px;color:var(--text3);display:flex;align-items:center;gap:3px" title="Corrige el número de temas si sabes que Discogs se queda corto">real: <input type="number" min="1" value="${e.countOverride || tl.length}" onchange="setCortadorCountOverride(${i}, this.value)" style="width:40px;padding:1px 3px"></label>` : ''}
               <span class="track-origin missing" style="cursor:pointer" onclick="removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
             </div>`;
           }).join('')}
         </div>
         ${pendingDiscs ? `<p style="font-size:11px;color:var(--text3)">Trayendo datos de Discogs de ${pendingDiscs} disco(s)...</p>` : ''}
-        ${expectedTracks.length ? `<p style="font-size:12px;color:var(--accent)">Discogs dice: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total.</p>` : ''}
+        ${expectedTracks.length ? `<p style="font-size:12px;color:var(--accent)">Discogs dice: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total${expectedUnknownCount ? ` (${expectedUnknownCount} sin duración conocida)` : ''}.</p>` : ''}
         ` : ''}
       </div>
 
@@ -2315,16 +2358,44 @@ function removeCortadorSessionDisc(i) {
 function getCortadorExpectedTracks() {
   const expected = [];
   for (const entry of cortadorSessionDiscs) {
+    if (entry.manual) {
+      // Disco añadido a mano: no hay datos de Discogs, solo sabemos cuántos temas hay
+      const discName = entry.title;
+      for (let i = 0; i < entry.trackCount; i++) {
+        expected.push({ disc: discName, position: String(i + 1), title: `${discName} — tema ${i + 1}`, durationSec: null });
+      }
+      continue;
+    }
     const releaseId = g(entry.row, COL.release_id);
     const cleanId = releaseId.toString().slice(0, -1);
     const tl = tracklistCache[cleanId];
     if (!tl) continue; // aún no ha llegado de Discogs
-    for (const t of tl) {
-      const durSec = parseDiscogsDuration(t.duration);
-      if (durSec) expected.push({ disc: g(entry.row, COL.title), position: t.position, title: t.title, durationSec: durSec });
+    const discTitle = g(entry.row, COL.title);
+    const discTracks = tl.map(t => ({ disc: discTitle, position: t.position, title: t.title, durationSec: parseDiscogsDuration(t.duration) }));
+    // Si el usuario sabe que hay más temas de los que trae Discogs, rellenar con "duración desconocida"
+    if (entry.countOverride && entry.countOverride > discTracks.length) {
+      for (let i = discTracks.length; i < entry.countOverride; i++) {
+        discTracks.push({ disc: discTitle, position: String(i + 1), title: `${discTitle} — tema ${i + 1} (no está en Discogs)`, durationSec: null });
+      }
     }
+    expected.push(...discTracks);
   }
   return expected;
+}
+
+async function addCortadorManualDisc() {
+  const name = (document.getElementById('cortador-manual-name')?.value || '').trim();
+  const count = parseInt(document.getElementById('cortador-manual-count')?.value || '0', 10);
+  if (!name) { showToast('⚠ Escribe un nombre para el disco', true); return; }
+  if (!count || count < 1) { showToast('⚠ Indica cuántos temas tiene', true); return; }
+  cortadorSessionDiscs.push({ manual: true, title: name, trackCount: count });
+  renderCortador();
+}
+
+function setCortadorCountOverride(i, value) {
+  const n = parseInt(value, 10);
+  cortadorSessionDiscs[i].countOverride = n > 0 ? n : null;
+  renderCortador();
 }
 
 function onCortadorAutoToggle() {
