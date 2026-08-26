@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.53 — Dj Petrik</title>
+<title>VinylBase v2.54 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.53</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.54</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -793,6 +793,10 @@ function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, max
 // el siguiente) — normalmente es la otra mitad de la misma canción mal cortada, no el
 // tema de al lado (que suele durar más). Si solo hay un vecino posible, se usa ese.
 function mergeShortSegments(segments, minTrackSec) {
+  // Por debajo de este tamaño, ya no es "una canción mal cortada" — es basura real
+  // (ruido de aguja, cambio de disco). Se descarta sin más, no se pega a ningún vecino.
+  const TRASH_THRESHOLD_SEC = Math.min(30, minTrackSec * 0.3);
+
   let segs = segments.map(s => ({ ...s }));
   let iterations = 0;
   while (iterations < 500) {
@@ -803,6 +807,12 @@ function mergeShortSegments(segments, minTrackSec) {
     }
     if (idx === -1) break; // no quedan trozos demasiado cortos
     if (segs.length === 1) break; // no hay nada con quien fusionar
+
+    const dur = segs[idx].endSec - segs[idx].startSec;
+    if (dur < TRASH_THRESHOLD_SEC) {
+      segs.splice(idx, 1); // basura: fuera, no se pega a ningún tema
+      continue;
+    }
 
     const prev = idx > 0 ? segs[idx - 1] : null;
     const next = idx < segs.length - 1 ? segs[idx + 1] : null;
