@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.38 — Dj Petrik</title>
+<title>VinylBase v2.39 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.38</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.39</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -250,6 +250,11 @@
     <button class="nav-item" id="nav-temasjuntos" onclick="setView('temasjuntos')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M7 8V6a5 5 0 0 1 10 0v2"/></svg>
       Temas Juntos
+    </button>
+    <div class="nav-section">Herramientas</div>
+    <button class="nav-item" id="nav-cortador" onclick="setView('cortador')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+      Cortar rip
     </button>
     <div class="nav-section">DJ</div>
     <button class="nav-item" id="nav-sesiones" onclick="setView('sesiones')">
@@ -414,6 +419,8 @@ async function restoreDirHandles() {
     musicDirHandle2 = m2;
     musicDir2Granted = (await m2.queryPermission({ mode: 'read' })) === 'granted';
   }
+  const co = await loadDirHandle('cortadorOut');
+  if (co) cortadorOutDirHandle = co;
 }
 
 async function reconnectDir(kind) {
@@ -545,6 +552,226 @@ async function getMusicDir2() {
     if (perm === 'granted') return musicDirHandle2;
   }
   return null;
+}
+
+// ─── CORTADOR DE RIPS (detectar silencios y trocear el WAV grande) ─────────────
+let cortadorFileHandle = null;
+let cortadorOutDirHandle = null;
+let cortadorRunning = false;
+let cortadorLog = [];
+
+function cortadorLogLine(msg) {
+  cortadorLog.push(msg);
+  if (view === 'cortador') renderCortador();
+}
+
+async function pickCortadorFile() {
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'Audio WAV', accept: { 'audio/wav': ['.wav'] } }],
+      multiple: false,
+    });
+    cortadorFileHandle = handle;
+    renderCortador();
+  } catch(e) { /* selección cancelada */ }
+}
+
+async function pickCortadorOutDir() {
+  try {
+    cortadorOutDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    await saveDirHandle('cortadorOut', cortadorOutDirHandle);
+    renderCortador();
+  } catch(e) { /* selección cancelada */ }
+}
+
+function parseWavHeader(buffer) {
+  const view = new DataView(buffer);
+  if (view.getUint32(0, false) !== 0x52494646) throw new Error('No es un WAV válido (falta cabecera RIFF)');
+  if (view.getUint32(8, false) !== 0x57415645) throw new Error('No es un WAV válido (falta cabecera WAVE)');
+  let offset = 12;
+  let fmt = null, dataOffset = null, dataLength = null;
+  while (offset + 8 <= view.byteLength) {
+    const chunkId = view.getUint32(offset, false);
+    const chunkSize = view.getUint32(offset + 4, true);
+    if (chunkId === 0x666d7420) { // 'fmt '
+      fmt = {
+        audioFormat: view.getUint16(offset + 8, true),
+        numChannels: view.getUint16(offset + 10, true),
+        sampleRate: view.getUint32(offset + 12, true),
+        bitsPerSample: view.getUint16(offset + 22, true),
+      };
+    } else if (chunkId === 0x64617461) { // 'data'
+      dataOffset = offset + 8;
+      dataLength = Math.min(chunkSize, view.byteLength - dataOffset);
+    }
+    offset += 8 + chunkSize + (chunkSize % 2);
+  }
+  if (!fmt) throw new Error('No se encontró el bloque "fmt " en el WAV');
+  if (dataOffset == null) throw new Error('No se encontraron datos de audio en el WAV');
+  return { fmt, dataOffset, dataLength };
+}
+
+// Calcula un "envolvente" de amplitud (RMS por ventana) sin duplicar todo el audio en memoria
+function computeEnvelope(buffer, fmt, dataOffset, dataLength, windowMs) {
+  const { sampleRate, numChannels, bitsPerSample, audioFormat } = fmt;
+  const bytesPerSample = bitsPerSample / 8;
+  const frameSize = bytesPerSample * numChannels;
+  const totalFrames = Math.floor(dataLength / frameSize);
+  const windowFrames = Math.max(1, Math.round(sampleRate * windowMs / 1000));
+  const numWindows = Math.max(1, Math.ceil(totalFrames / windowFrames));
+  const envelope = new Float32Array(numWindows);
+  const view = new DataView(buffer);
+
+  function readSample(byteOffset) {
+    if (audioFormat === 3) return view.getFloat32(byteOffset, true);
+    if (bitsPerSample === 16) return view.getInt16(byteOffset, true) / 32768;
+    if (bitsPerSample === 24) {
+      const b0 = view.getUint8(byteOffset), b1 = view.getUint8(byteOffset + 1), b2 = view.getUint8(byteOffset + 2);
+      let val = (b2 << 16) | (b1 << 8) | b0;
+      if (val & 0x800000) val -= 0x1000000;
+      return val / 8388608;
+    }
+    if (bitsPerSample === 32) return view.getInt32(byteOffset, true) / 2147483648;
+    if (bitsPerSample === 8) return (view.getUint8(byteOffset) - 128) / 128;
+    return 0;
+  }
+
+  for (let w = 0; w < numWindows; w++) {
+    const startFrame = w * windowFrames;
+    const endFrame = Math.min(totalFrames, startFrame + windowFrames);
+    const step = Math.max(1, Math.floor((endFrame - startFrame) / 200)); // muestreo, no cada sample
+    let sumSq = 0, count = 0;
+    for (let f = startFrame; f < endFrame; f += step) {
+      const byteOffset = dataOffset + f * frameSize;
+      let val = 0;
+      for (let ch = 0; ch < numChannels; ch++) val += readSample(byteOffset + ch * bytesPerSample);
+      val /= numChannels;
+      sumSq += val * val;
+      count++;
+    }
+    envelope[w] = count ? Math.sqrt(sumSq / count) : 0;
+  }
+  return { envelope, windowMs };
+}
+
+function detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec) {
+  const threshold = Math.pow(10, thresholdDb / 20);
+  const minSilenceWindows = Math.max(1, Math.ceil((minSilenceSec * 1000) / windowMs));
+  const isSilent = envelope.map(v => v < threshold);
+
+  const silenceRegions = [];
+  let i = 0;
+  while (i < isSilent.length) {
+    if (isSilent[i]) {
+      let j = i;
+      while (j < isSilent.length && isSilent[j]) j++;
+      if (j - i >= minSilenceWindows) silenceRegions.push([i, j]);
+      i = j;
+    } else i++;
+  }
+
+  const segments = [];
+  let cursor = 0;
+  for (const [s, e] of silenceRegions) {
+    if (s > cursor) segments.push([cursor, s]);
+    cursor = e;
+  }
+  if (cursor < envelope.length) segments.push([cursor, envelope.length]);
+
+  const winSec = windowMs / 1000;
+  return segments
+    .map(([s, e]) => ({ startSec: s * winSec, endSec: Math.min(totalDurationSec, e * winSec) }))
+    .filter(seg => (seg.endSec - seg.startSec) > 3); // ignora restos de menos de 3s (no son canciones)
+}
+
+function writeWavStr(view, offset, str) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec) {
+  const { sampleRate, numChannels, bitsPerSample } = fmt;
+  const frameSize = (bitsPerSample / 8) * numChannels;
+  const totalFrames = Math.floor(dataLength / frameSize);
+  let startFrame = Math.max(0, Math.floor(startSec * sampleRate));
+  let endFrame = Math.min(totalFrames, Math.ceil(endSec * sampleRate));
+  if (endFrame <= startFrame) endFrame = Math.min(totalFrames, startFrame + 1);
+  const dataBytes = (endFrame - startFrame) * frameSize;
+
+  const headerSize = 44;
+  const out = new ArrayBuffer(headerSize + dataBytes);
+  const view = new DataView(out);
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  writeWavStr(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes, true);
+  writeWavStr(view, 8, 'WAVE');
+  writeWavStr(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, frameSize, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeWavStr(view, 36, 'data');
+  view.setUint32(40, dataBytes, true);
+  new Uint8Array(out, headerSize).set(new Uint8Array(buffer, dataOffset + startFrame * frameSize, dataBytes));
+  return out;
+}
+
+function fmtDuration(sec) {
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+async function runCortador() {
+  if (!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) return;
+  cortadorRunning = true;
+  cortadorLog = [];
+  renderCortador();
+  try {
+    cortadorLogLine('Leyendo el archivo...');
+    const file = await cortadorFileHandle.getFile();
+    const buffer = await file.arrayBuffer();
+
+    cortadorLogLine('Analizando el WAV...');
+    const { fmt, dataOffset, dataLength } = parseWavHeader(buffer);
+    const frameSize = (fmt.bitsPerSample / 8) * fmt.numChannels;
+    const totalDurationSec = dataLength / frameSize / fmt.sampleRate;
+
+    const thresholdDb = parseFloat(document.getElementById('cortador-threshold')?.value || '-45');
+    const minSilenceSec = parseFloat(document.getElementById('cortador-mingap')?.value || '1.2');
+
+    cortadorLogLine('Detectando silencios entre temas...');
+    const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
+    const segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
+
+    if (!segments.length) {
+      cortadorLogLine('⚠ No se detectó ningún tema. Prueba a bajar el umbral de silencio.');
+      cortadorRunning = false;
+      renderCortador();
+      return;
+    }
+
+    cortadorLogLine(`Detectados ${segments.length} temas. Guardando...`);
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const endWithPad = Math.min(totalDurationSec, seg.endSec + 1); // 1s después de acabar
+      const wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, seg.startSec, endWithPad);
+      const outHandle = await cortadorOutDirHandle.getFileHandle(String(i + 1) + '.wav', { create: true });
+      const writable = await outHandle.createWritable();
+      await writable.write(wavBuffer);
+      await writable.close();
+      cortadorLogLine(`✓ ${i + 1}.wav — ${fmtDuration(seg.startSec)} a ${fmtDuration(endWithPad)} (${fmtDuration(endWithPad - seg.startSec)})`);
+    }
+    cortadorLogLine(`✓ Listo. ${segments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
+    showToast(`✓ ${segments.length} temas cortados y guardados`);
+  } catch(e) {
+    console.error(e);
+    cortadorLogLine('⚠ Error: ' + e.message);
+    showToast('⚠ Error al procesar el WAV', true);
+  }
+  cortadorRunning = false;
+  renderCortador();
 }
 
 function sanitizeFolderName(name) {
@@ -967,6 +1194,7 @@ function renderView() {
   if (view === 'sesiones') { renderSesiones(); return; }
   if (view === 'temasjuntos') { renderTemasJuntos(); return; }
   if (view === 'buscador') { renderBuscador(); return; }
+  if (view === 'cortador') { renderCortador(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
@@ -1578,6 +1806,64 @@ function renderBuscador() {
 
       ${qn && !digitalResults.length && !vinylResults.length ? `<div class="state-center" style="padding:40px"><p>No tienes nada con ese nombre.</p></div>` : ''}
     </div>`;
+}
+
+// ─── VISTA DEL CORTADOR DE RIPS ─────────────────────────────────────────────────
+function renderCortador() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="content-header">
+      <div style="font-weight:600">✂️ Cortar rip</div>
+    </div>
+    <div style="padding:16px;overflow-y:auto;height:calc(100% - 60px);max-width:640px">
+      <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
+        Dale el WAV grande que has grabado de la Denon y una carpeta de salida. Detecto los huecos de silencio entre temas
+        y te guardo cada uno como 1.wav, 2.wav, 3.wav... cortado justo donde empieza y 1 segundo después de acabar.
+        El original no se toca.
+      </p>
+
+      <div class="config-section">
+        <h3>1. Archivo WAV grabado</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" onclick="pickCortadorFile()">Elegir archivo WAV</button>
+          <span style="font-size:12px;color:var(--text3)">${cortadorFileHandle ? '📄 ' + cortadorFileHandle.name : 'Ningún archivo elegido'}</span>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <h3>2. Carpeta donde guardar los temas cortados</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" onclick="pickCortadorOutDir()">Elegir carpeta de salida</button>
+          <span style="font-size:12px;color:var(--text3)">${cortadorOutDirHandle ? '📁 ' + cortadorOutDirHandle.name : 'Ninguna carpeta elegida'}</span>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <h3>3. Sensibilidad (opcional, ya viene con valores que funcionan bien)</h3>
+        <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--text2)">
+          <label>Umbral de silencio: <input id="cortador-threshold" type="range" min="-60" max="-20" value="-45" step="1" style="vertical-align:middle"> <span id="cortador-threshold-val">-45 dB</span></label>
+          <label>Duración mínima del hueco: <input id="cortador-mingap" type="range" min="0.5" max="3" value="1.2" step="0.1" style="vertical-align:middle"> <span id="cortador-mingap-val">1.2 s</span></label>
+        </div>
+      </div>
+
+      <button class="btn btn-accent" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px"
+        ${(!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) ? 'disabled' : ''}
+        onclick="runCortador()">
+        ${cortadorRunning ? 'Procesando...' : '✂️ Cortar y guardar'}
+      </button>
+
+      ${cortadorLog.length ? `
+      <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;font-family:monospace;color:var(--text2);max-height:300px;overflow-y:auto">
+        ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
+      </div>` : ''}
+    </div>`;
+
+  const th = document.getElementById('cortador-threshold');
+  const thVal = document.getElementById('cortador-threshold-val');
+  if (th) th.oninput = () => { thVal.textContent = th.value + ' dB'; };
+  const mg = document.getElementById('cortador-mingap');
+  const mgVal = document.getElementById('cortador-mingap-val');
+  if (mg) mg.oninput = () => { mgVal.textContent = mg.value + ' s'; };
 }
 
 function renderSesiones() {
