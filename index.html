@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.43 — Dj Petrik</title>
+<title>VinylBase v2.44 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.43</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.44</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -721,33 +721,75 @@ function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, max
     merged.shift();
   }
 
-  // Reintentar dentro de los segmentos demasiado largos, con umbrales cada vez más permisivos
-  const result = [];
   const notes = [];
+  const result = [];
   for (const seg of merged) {
-    const durationSec = seg.endSec - seg.startSec;
-    if (durationSec <= maxTrackSec) { result.push(seg); continue; }
-
-    const wStart = Math.max(0, Math.floor(seg.startSec / winSec));
-    const wEnd = Math.min(envelope.length, Math.ceil(seg.endSec / winSec));
-    const subEnv = envelope.slice(wStart, wEnd);
-
-    let rescued = null;
-    for (const marginDb of [6, 9, 12]) {
-      const dbTry = computeAdaptiveThresholdDb(subEnv, marginDb);
-      const subSegs = detectSegments(subEnv, windowMs, dbTry, 0.6, durationSec);
-      if (subSegs.length > 1) { rescued = subSegs; break; }
-    }
-
-    if (rescued) {
-      for (const s of rescued) result.push({ startSec: seg.startSec + s.startSec, endSec: seg.startSec + s.endSec });
-      notes.push(`↳ Tema largo (${fmtDuration(durationSec)}) — encontrado un hueco que faltaba, dividido en ${rescued.length}`);
-    } else {
-      result.push(seg);
-      notes.push(`⚠ Tema de ${fmtDuration(durationSec)} — parece largo pero no encontré ningún hueco dentro, revísalo tú`);
-    }
+    result.push(...rescueLongSegment(seg, envelope, windowMs, minTrackSec, maxTrackSec, notes));
   }
   return { segments: result, notes };
+}
+
+// Dentro de un tramo, busca el punto con menor amplitud media sostenida (ventana de ~1s),
+// evitando los bordes -- es el mejor candidato de corte cuando no hay un silencio "limpio".
+function findQuietestPoint(subEnv, windowMs, minTrackSec) {
+  const winSec = windowMs / 1000;
+  const spanWindows = Math.max(1, Math.round(1.0 / winSec));
+  const marginWindows = Math.max(1, Math.round((minTrackSec * 0.3) / winSec));
+  if (subEnv.length - spanWindows - marginWindows * 2 <= 0) return null;
+  let bestIdx = -1, bestVal = Infinity;
+  for (let i = marginWindows; i < subEnv.length - spanWindows - marginWindows; i++) {
+    let sum = 0;
+    for (let k = 0; k < spanWindows; k++) sum += subEnv[i + k];
+    const avg = sum / spanWindows;
+    if (avg < bestVal) { bestVal = avg; bestIdx = i; }
+  }
+  if (bestIdx === -1) return null;
+  return (bestIdx + spanWindows / 2) * winSec;
+}
+
+// Intenta rescatar un tramo demasiado largo: primero probando huecos cada vez más flojos
+// y más cortos; si no encuentra ninguno limpio, fuerza el corte en el punto más silencioso
+// que haya. Se llama a sí misma por si el trozo resultante sigue siendo demasiado largo.
+function rescueLongSegment(seg, envelope, windowMs, minTrackSec, maxTrackSec, notes) {
+  const durationSec = seg.endSec - seg.startSec;
+  if (durationSec <= maxTrackSec) return [seg];
+
+  const winSec = windowMs / 1000;
+  const wStart = Math.max(0, Math.floor(seg.startSec / winSec));
+  const wEnd = Math.min(envelope.length, Math.ceil(seg.endSec / winSec));
+  const subEnv = envelope.slice(wStart, wEnd);
+
+  let rescued = null;
+  outer:
+  for (const marginDb of [6, 9, 12, 16, 20, 25]) {
+    for (const minSil of [0.6, 0.3]) {
+      const dbTry = computeAdaptiveThresholdDb(subEnv, marginDb);
+      const subSegs = detectSegments(subEnv, windowMs, dbTry, minSil, durationSec);
+      if (subSegs.length > 1) { rescued = subSegs; break outer; }
+    }
+  }
+
+  let pieces;
+  if (rescued) {
+    pieces = rescued.map(s => ({ startSec: seg.startSec + s.startSec, endSec: seg.startSec + s.endSec }));
+    notes.push(`↳ Tema largo (${fmtDuration(durationSec)}) — encontrado un hueco que faltaba, dividido en ${rescued.length}`);
+  } else {
+    const splitSec = findQuietestPoint(subEnv, windowMs, minTrackSec);
+    if (splitSec == null) {
+      notes.push(`⚠ Tema de ${fmtDuration(durationSec)} — no pude dividirlo, revísalo tú`);
+      return [seg];
+    }
+    pieces = [
+      { startSec: seg.startSec, endSec: seg.startSec + splitSec },
+      { startSec: seg.startSec + splitSec, endSec: seg.endSec },
+    ];
+    notes.push(`⚠ Tema largo (${fmtDuration(durationSec)}) — no encontré un hueco limpio, corté en el punto más flojo (${fmtDuration(seg.startSec + splitSec)}). Revísalo, puede no ser exacto.`);
+  }
+
+  // Por si alguno de los trozos resultantes sigue siendo demasiado largo
+  let final = [];
+  for (const p of pieces) final = final.concat(rescueLongSegment(p, envelope, windowMs, minTrackSec, maxTrackSec, notes));
+  return final;
 }
 
 function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec) {
@@ -787,6 +829,17 @@ function fmtDuration(sec) {
 
 async function runCortador() {
   if (!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) return;
+
+  // Leer TODOS los valores del formulario antes de tocar nada del redibujado,
+  // porque en cuanto renderCortador() se llama, los campos vuelven a su valor de plantilla.
+  const isAuto = document.getElementById('cortador-auto')?.checked;
+  const minSilenceSec = parseFloat(document.getElementById('cortador-mingap')?.value || '1.2');
+  const manualThresholdDb = parseFloat(document.getElementById('cortador-threshold')?.value || '-45');
+  const minTrackMin = parseFloat(document.getElementById('cortador-mintrack')?.value || '2.5');
+  const maxTrackMin = parseFloat(document.getElementById('cortador-maxtrack')?.value || '8');
+  const trimStartSec = parseFloat(document.getElementById('cortador-trimstart')?.value || '0.3');
+  const padEndSec = parseFloat(document.getElementById('cortador-padend')?.value || '1');
+
   cortadorRunning = true;
   cortadorLog = [];
   renderCortador();
@@ -800,14 +853,9 @@ async function runCortador() {
     const frameSize = (fmt.bitsPerSample / 8) * fmt.numChannels;
     const totalDurationSec = dataLength / frameSize / fmt.sampleRate;
 
-    const isAuto = document.getElementById('cortador-auto')?.checked;
-    const minSilenceSec = parseFloat(document.getElementById('cortador-mingap')?.value || '1.2');
-
     cortadorLogLine('Detectando silencios entre temas...');
     const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
-    const thresholdDb = isAuto
-      ? computeAdaptiveThresholdDb(envelope, 4)
-      : parseFloat(document.getElementById('cortador-threshold')?.value || '-45');
+    const thresholdDb = isAuto ? computeAdaptiveThresholdDb(envelope, 4) : manualThresholdDb;
     if (isAuto) cortadorLogLine(`Umbral automático calculado: ${thresholdDb.toFixed(1)} dB`);
     let segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
 
@@ -818,17 +866,12 @@ async function runCortador() {
       return;
     }
 
-    const minTrackMin = parseFloat(document.getElementById('cortador-mintrack')?.value || '2.5');
-    const maxTrackMin = parseFloat(document.getElementById('cortador-maxtrack')?.value || '8');
     const refined = refineSegmentsByDuration(segments, envelope, windowMs, minTrackMin * 60, maxTrackMin * 60);
     segments = refined.segments;
     if (refined.notes.length) {
       cortadorLogLine(`Ajustando por duración esperada (${minTrackMin}-${maxTrackMin} min)...`);
       refined.notes.forEach(cortadorLogLine);
     }
-
-    const trimStartSec = parseFloat(document.getElementById('cortador-trimstart')?.value || '0.3');
-    const padEndSec = parseFloat(document.getElementById('cortador-padend')?.value || '1');
 
     cortadorLogLine(`Detectados ${segments.length} temas. Guardando...`);
     for (let i = 0; i < segments.length; i++) {
