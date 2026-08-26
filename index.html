@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.51 — Dj Petrik</title>
+<title>VinylBase v2.52 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.51</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.52</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -740,6 +740,44 @@ function writeWavStr(view, offset, str) {
 // Segunda pasada de sentido común: un tema demasiado corto probablemente sea un pasaje
 // flojo mal cortado (se fusiona con el vecino); un tema demasiado largo probablemente
 // se haya "tragado" un hueco real (se vuelve a rastrear ahí dentro con más sensibilidad).
+// Cuando sabemos el número exacto de temas y sus duraciones (Discogs), y detectamos
+// MÁS trozos de los esperados, busca qué fusión de dos trozos vecinos hace que las
+// duraciones resultantes se parezcan más a las reales — no solo "es corto, fusiona".
+function reconcileSegmentCount(segments, expectedDurations, logFn) {
+  let segs = segments.map(s => ({ ...s }));
+  let guard = 0;
+  while (segs.length > expectedDurations.length && segs.length > 1 && guard < 20) {
+    guard++;
+    let bestIdx = -1, bestScore = Infinity;
+    // Si fusionando un par cualquiera llegamos exactamente al número esperado,
+    // podemos comparar posición a posición contra las duraciones reales de Discogs.
+    if (segs.length - 1 === expectedDurations.length) {
+      for (let i = 0; i < segs.length - 1; i++) {
+        const merged = segs.slice(0, i)
+          .concat([{ startSec: segs[i].startSec, endSec: segs[i + 1].endSec }])
+          .concat(segs.slice(i + 2));
+        let score = 0;
+        for (let k = 0; k < merged.length; k++) {
+          score += Math.abs((merged[k].endSec - merged[k].startSec) - expectedDurations[k]);
+        }
+        if (score < bestScore) { bestScore = score; bestIdx = i; }
+      }
+      if (bestIdx !== -1 && logFn) logFn(`Fusión ${bestIdx + 1}+${bestIdx + 2}: la que mejor encaja con las duraciones de Discogs.`);
+    } else {
+      // Hace falta más de una fusión: de momento, la pareja con menor duración combinada
+      let bestCombined = Infinity;
+      for (let i = 0; i < segs.length - 1; i++) {
+        const combined = (segs[i].endSec - segs[i].startSec) + (segs[i + 1].endSec - segs[i + 1].startSec);
+        if (combined < bestCombined) { bestCombined = combined; bestIdx = i; }
+      }
+    }
+    if (bestIdx === -1) break;
+    segs[bestIdx] = { startSec: segs[bestIdx].startSec, endSec: segs[bestIdx + 1].endSec };
+    segs.splice(bestIdx + 1, 1);
+  }
+  return segs;
+}
+
 function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, maxTrackSec) {
   const merged = mergeShortSegments(segments, minTrackSec);
 
@@ -938,6 +976,15 @@ async function analyzeCortador() {
   if (refined.notes.length) {
     cortadorLogLine(`Ajustando por duración esperada (${(effectiveMinSec/60).toFixed(1)}-${(effectiveMaxSec/60).toFixed(1)} min)...`);
     refined.notes.forEach(cortadorLogLine);
+  }
+
+  // Si el número de trozos detectados no coincide con el número real de temas de
+  // Discogs, intentar reconciliarlo fusionando el par que mejor encaje con las
+  // duraciones reales, en vez de conformarnos con lo que salió del paso anterior.
+  if (expectedTracksPre.length && segments.length > expectedTracksPre.length) {
+    const expectedDurations = expectedTracksPre.map(t => t.durationSec);
+    cortadorLogLine(`Se detectaron ${segments.length} trozos pero Discogs dice que hay ${expectedDurations.length} temas — ajustando...`);
+    segments = reconcileSegmentCount(segments, expectedDurations, cortadorLogLine);
   }
 
   // Aplicar los márgenes de inicio/final a cada segmento, calculando ya el resultado final
