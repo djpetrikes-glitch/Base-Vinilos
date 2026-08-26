@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.60 — Dj Petrik</title>
+<title>VinylBase v2.61 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.60</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.61</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -841,12 +841,15 @@ async function getCoverBytes(cleanId) {
   if (!url) { coverBytesCache[cleanId] = null; return null; }
   try {
     const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const buf = await res.arrayBuffer();
     const mime = res.headers.get('content-type') || 'image/jpeg';
     const result = { bytes: buf, mime };
     coverBytesCache[cleanId] = result;
     return result;
   } catch(e) {
+    console.error('No se pudo descargar la carátula para incrustar:', e);
+    cortadorLogLine(`⚠ No se pudo descargar la carátula (${e.message || e}) — probablemente el servidor de imágenes de Discogs bloquea esta descarga desde el navegador (CORS). El resto de etiquetas se guardan igual.`);
     coverBytesCache[cleanId] = null;
     return null;
   }
@@ -1250,6 +1253,18 @@ function buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec)
   });
 }
 
+// Nombre de archivo "(Artista) - Título" a partir de un tema esperado de Discogs.
+// Si no hay artista disponible, cae en la posición (A1, A2...) o un número.
+function buildTrackFileName(expTrack, fallbackIndex) {
+  const artist = expTrack.row ? g(expTrack.row, COL.artist) : '';
+  const title = expTrack.title || '';
+  if (artist && title) return sanitizeFolderName(`(${artist}) - ${title}`);
+  if (title) return sanitizeFolderName(title);
+  const pos = (expTrack.position || '').trim();
+  if (pos) return sanitizeFolderName(pos);
+  return String(fallbackIndex + 1);
+}
+
 async function analyzeCortador() {
   const raw = await analyzeCortadorRaw();
   if (!raw) return null;
@@ -1403,8 +1418,8 @@ async function confirmCortadorAssociation() {
       try {
         wavBuffer = await embedTagsInWav(wavBuffer, matchedTracksInOrder[i]);
       } catch(e) { console.error('Error incrustando etiquetas:', e); }
-      const pos = (matchedTracksInOrder[i].position || '').trim();
-      if (pos) baseName = sanitizeFolderName(pos);
+      const pos = buildTrackFileName(matchedTracksInOrder[i], i);
+      if (pos) baseName = pos;
       if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1);
       usedNames.add(baseName);
       const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
@@ -1454,8 +1469,8 @@ async function runCortador() {
         } catch(e) {
           console.error('Error incrustando etiquetas:', e);
         }
-        const pos = (matchedExpectedTracks[i].position || '').trim();
-        if (pos) baseName = sanitizeFolderName(pos);
+        const pos = buildTrackFileName(matchedExpectedTracks[i], i);
+        if (pos) baseName = pos;
       }
       if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1); // por si dos posiciones salen iguales
       usedNames.add(baseName);
