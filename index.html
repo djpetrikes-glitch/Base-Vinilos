@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.63 — Dj Petrik</title>
+<title>VinylBase v2.65 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.63</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.65</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -862,6 +862,29 @@ function tryCoverViaCanvas(url) {
   });
 }
 
+// Vía proxy: un servicio de terceros pide la imagen por nosotros (él no es un
+// navegador, no tiene el problema de CORS) y nos la reenvía ya sin bloqueo.
+// Probamos varios por si alguno está caído o da problemas.
+async function tryCoverViaProxy(url) {
+  const proxies = [
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+    'https://corsproxy.io/?' + encodeURIComponent(url),
+  ];
+  for (const proxyUrl of proxies) {
+    try {
+      const res = await fetch(proxyUrl);
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      if (!buf || buf.byteLength < 200) continue; // demasiado pequeño para ser una imagen de verdad
+      const mime = res.headers.get('content-type') || 'image/jpeg';
+      return { bytes: buf, mime: mime.startsWith('image/') ? mime : 'image/jpeg', proxyUsed: proxyUrl };
+    } catch(e) {
+      continue; // este proxy ha fallado, probar el siguiente
+    }
+  }
+  return null;
+}
+
 async function getCoverBytes(cleanId) {
   if (coverBytesCache[cleanId] !== undefined) return coverBytesCache[cleanId];
   const url = coverCache[cleanId];
@@ -870,6 +893,7 @@ async function getCoverBytes(cleanId) {
     coverBytesCache[cleanId] = null;
     return null;
   }
+  // Intento 1: descarga directa
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -879,17 +903,28 @@ async function getCoverBytes(cleanId) {
     coverBytesCache[cleanId] = result;
     return result;
   } catch(e) {
-    console.error('Descarga directa de carátula falló, probando por canvas:', e);
-    const viaCanvas = await tryCoverViaCanvas(url);
-    if (viaCanvas) {
-      coverBytesCache[cleanId] = viaCanvas;
-      cortadorLogLine(`✓ Carátula conseguida por la vía alternativa (canvas), la descarga directa falló pero esta sí funcionó.`);
-      return viaCanvas;
-    }
-    cortadorLogLine(`⚠ No se pudo conseguir la carátula por ninguna vía (${e.message || e}) — el servidor de imágenes de Discogs bloquea esto de verdad. El resto de etiquetas se guardan igual.`);
-    coverBytesCache[cleanId] = null;
-    return null;
+    console.error('Descarga directa de carátula falló, probando por proxy:', e);
   }
+
+  // Intento 2: proxy de terceros
+  const viaProxy = await tryCoverViaProxy(url);
+  if (viaProxy) {
+    coverBytesCache[cleanId] = viaProxy;
+    cortadorLogLine(`✓ Carátula conseguida vía proxy (${viaProxy.proxyUsed.split('/')[2]}).`);
+    return viaProxy;
+  }
+
+  // Intento 3: canvas (último recurso)
+  const viaCanvas = await tryCoverViaCanvas(url);
+  if (viaCanvas) {
+    coverBytesCache[cleanId] = viaCanvas;
+    cortadorLogLine(`✓ Carátula conseguida por la vía alternativa (canvas).`);
+    return viaCanvas;
+  }
+
+  cortadorLogLine(`⚠ No se pudo conseguir la carátula por ninguna vía (directa, proxy, ni canvas) — el resto de etiquetas se guardan igual.`);
+  coverBytesCache[cleanId] = null;
+  return null;
 }
 
 // Construye el WAV final con etiquetas ID3v2 (título, artista, álbum, pista, año, género, sello) y carátula
@@ -905,6 +940,7 @@ async function embedTagsInWav(wavArrayBuffer, expTrack) {
     if (g(row, COL.genre)) frames.push(id3TextFrame('TCON', g(row, COL.genre)));
     if (g(row, COL.label)) frames.push(id3TextFrame('TPUB', g(row, COL.label)));
     if (g(row, COL.catalog)) frames.push(id3TxxxFrame('CATALOGNUMBER', g(row, COL.catalog)));
+    if (g(row, COL.catalog)) frames.push(id3TextFrame('TCOM', g(row, COL.catalog))); // Compositor = referencia de catálogo, a petición
 
     const releaseId = g(row, COL.release_id);
     if (releaseId) {
@@ -1191,7 +1227,11 @@ function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec
 }
 
 function fmtDuration(sec) {
-  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  const totalSec = Math.max(0, Math.round(sec));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
   return m + ':' + String(s).padStart(2, '0');
 }
 
@@ -1491,7 +1531,7 @@ async function runCortador() {
     const { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks } = result;
 
     if (matchedExpectedTracks) {
-      cortadorLogLine('🏷 Se incrustarán título, artista, álbum, pista, año, género, sello, referencia de catálogo y carátula (coincide el número de temas con Discogs).');
+      cortadorLogLine('🏷 Se incrustarán título, artista, álbum, pista, año, género, sello, referencia de catálogo (en catálogo y compositor) y carátula (coincide el número de temas con Discogs).');
     }
 
     cortadorLogLine(`Detectados ${finalSegments.length} temas. Guardando...`);
