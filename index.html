@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.39 — Dj Petrik</title>
+<title>VinylBase v2.43 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.39</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.43</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -654,6 +654,19 @@ function computeEnvelope(buffer, fmt, dataOffset, dataLength, windowMs) {
   return { envelope, windowMs };
 }
 
+// Calcula un umbral de silencio a medida de esta grabación en concreto, en vez de
+// usar siempre el mismo valor fijo: mira cuál es el "suelo de ruido" real (percentil
+// bajo de la envolvente) y pone el umbral unos dB por encima de ese suelo.
+function computeAdaptiveThresholdDb(envelope, marginDb) {
+  const sorted = Array.from(envelope).filter(v => v > 0).sort((a, b) => a - b);
+  if (!sorted.length) return -45;
+  // Usar un número FIJO de ventanas más silenciosas (no un porcentaje) — así funciona
+  // igual de bien tanto si la grabación tiene mucho silencio como si tiene muy poco.
+  const k = Math.min(sorted.length - 1, 15);
+  const noiseFloorDb = 20 * Math.log10(Math.max(sorted[k], 1e-6));
+  return noiseFloorDb + marginDb;
+}
+
 function detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec) {
   const threshold = Math.pow(10, thresholdDb / 20);
   const minSilenceWindows = Math.max(1, Math.ceil((minSilenceSec * 1000) / windowMs));
@@ -686,6 +699,55 @@ function detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDur
 
 function writeWavStr(view, offset, str) {
   for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+// Segunda pasada de sentido común: un tema demasiado corto probablemente sea un pasaje
+// flojo mal cortado (se fusiona con el vecino); un tema demasiado largo probablemente
+// se haya "tragado" un hueco real (se vuelve a rastrear ahí dentro con más sensibilidad).
+function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, maxTrackSec) {
+  const winSec = windowMs / 1000;
+
+  // Fusionar segmentos demasiado cortos con el siguiente (o el anterior si es el último)
+  let merged = [];
+  for (const seg of segments) {
+    if (merged.length && (seg.endSec - seg.startSec) < minTrackSec) {
+      merged[merged.length - 1] = { startSec: merged[merged.length - 1].startSec, endSec: seg.endSec };
+    } else {
+      merged.push({ ...seg });
+    }
+  }
+  if (merged.length > 1 && (merged[0].endSec - merged[0].startSec) < minTrackSec) {
+    merged[1] = { startSec: merged[0].startSec, endSec: merged[1].endSec };
+    merged.shift();
+  }
+
+  // Reintentar dentro de los segmentos demasiado largos, con umbrales cada vez más permisivos
+  const result = [];
+  const notes = [];
+  for (const seg of merged) {
+    const durationSec = seg.endSec - seg.startSec;
+    if (durationSec <= maxTrackSec) { result.push(seg); continue; }
+
+    const wStart = Math.max(0, Math.floor(seg.startSec / winSec));
+    const wEnd = Math.min(envelope.length, Math.ceil(seg.endSec / winSec));
+    const subEnv = envelope.slice(wStart, wEnd);
+
+    let rescued = null;
+    for (const marginDb of [6, 9, 12]) {
+      const dbTry = computeAdaptiveThresholdDb(subEnv, marginDb);
+      const subSegs = detectSegments(subEnv, windowMs, dbTry, 0.6, durationSec);
+      if (subSegs.length > 1) { rescued = subSegs; break; }
+    }
+
+    if (rescued) {
+      for (const s of rescued) result.push({ startSec: seg.startSec + s.startSec, endSec: seg.startSec + s.endSec });
+      notes.push(`↳ Tema largo (${fmtDuration(durationSec)}) — encontrado un hueco que faltaba, dividido en ${rescued.length}`);
+    } else {
+      result.push(seg);
+      notes.push(`⚠ Tema de ${fmtDuration(durationSec)} — parece largo pero no encontré ningún hueco dentro, revísalo tú`);
+    }
+  }
+  return { segments: result, notes };
 }
 
 function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec) {
@@ -738,12 +800,16 @@ async function runCortador() {
     const frameSize = (fmt.bitsPerSample / 8) * fmt.numChannels;
     const totalDurationSec = dataLength / frameSize / fmt.sampleRate;
 
-    const thresholdDb = parseFloat(document.getElementById('cortador-threshold')?.value || '-45');
+    const isAuto = document.getElementById('cortador-auto')?.checked;
     const minSilenceSec = parseFloat(document.getElementById('cortador-mingap')?.value || '1.2');
 
     cortadorLogLine('Detectando silencios entre temas...');
     const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
-    const segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
+    const thresholdDb = isAuto
+      ? computeAdaptiveThresholdDb(envelope, 4)
+      : parseFloat(document.getElementById('cortador-threshold')?.value || '-45');
+    if (isAuto) cortadorLogLine(`Umbral automático calculado: ${thresholdDb.toFixed(1)} dB`);
+    let segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
 
     if (!segments.length) {
       cortadorLogLine('⚠ No se detectó ningún tema. Prueba a bajar el umbral de silencio.');
@@ -752,16 +818,29 @@ async function runCortador() {
       return;
     }
 
+    const minTrackMin = parseFloat(document.getElementById('cortador-mintrack')?.value || '2.5');
+    const maxTrackMin = parseFloat(document.getElementById('cortador-maxtrack')?.value || '8');
+    const refined = refineSegmentsByDuration(segments, envelope, windowMs, minTrackMin * 60, maxTrackMin * 60);
+    segments = refined.segments;
+    if (refined.notes.length) {
+      cortadorLogLine(`Ajustando por duración esperada (${minTrackMin}-${maxTrackMin} min)...`);
+      refined.notes.forEach(cortadorLogLine);
+    }
+
+    const trimStartSec = parseFloat(document.getElementById('cortador-trimstart')?.value || '0.3');
+    const padEndSec = parseFloat(document.getElementById('cortador-padend')?.value || '1');
+
     cortadorLogLine(`Detectados ${segments.length} temas. Guardando...`);
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      const endWithPad = Math.min(totalDurationSec, seg.endSec + 1); // 1s después de acabar
-      const wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, seg.startSec, endWithPad);
+      const startTrimmed = Math.min(seg.endSec, seg.startSec + trimStartSec);
+      const endWithPad = Math.min(totalDurationSec, seg.endSec + padEndSec);
+      const wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, startTrimmed, endWithPad);
       const outHandle = await cortadorOutDirHandle.getFileHandle(String(i + 1) + '.wav', { create: true });
       const writable = await outHandle.createWritable();
       await writable.write(wavBuffer);
       await writable.close();
-      cortadorLogLine(`✓ ${i + 1}.wav — ${fmtDuration(seg.startSec)} a ${fmtDuration(endWithPad)} (${fmtDuration(endWithPad - seg.startSec)})`);
+      cortadorLogLine(`✓ ${i + 1}.wav — ${fmtDuration(startTrimmed)} a ${fmtDuration(endWithPad)} (${fmtDuration(endWithPad - startTrimmed)})`);
     }
     cortadorLogLine(`✓ Listo. ${segments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
     showToast(`✓ ${segments.length} temas cortados y guardados`);
@@ -1642,7 +1721,12 @@ let temasJuntosQ = '';
 
 function onTemasJuntosSearch(v) {
   temasJuntosQ = v;
+  const pos = v.length;
   renderTemasJuntos();
+  requestAnimationFrame(() => {
+    const inp = document.getElementById('tj-search-input');
+    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+  });
 }
 
 function reindexTemasJuntos() {
@@ -1680,7 +1764,7 @@ async function renderTemasJuntos() {
     <div class="content-header">
       <div class="search-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input placeholder="Buscar en tus ${items.length} temas..." value="${temasJuntosQ}" oninput="onTemasJuntosSearch(this.value)">
+        <input id="tj-search-input" placeholder="Buscar en tus ${items.length} temas..." value="${temasJuntosQ}" oninput="onTemasJuntosSearch(this.value)">
         ${temasJuntosQ ? `<svg onclick="onTemasJuntosSearch('')" style="cursor:pointer;flex-shrink:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` : ''}
       </div>
       <button class="btn" onclick="reindexTemasJuntos()">↻ Reindexar</button>
@@ -1716,7 +1800,12 @@ let buscadorQ = '';
 
 function onBuscadorSearch(v) {
   buscadorQ = v;
+  const pos = v.length;
   renderBuscador();
+  requestAnimationFrame(() => {
+    const inp = document.getElementById('buscador-input');
+    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+  });
 }
 
 function findVinylForDigitalEntry(e) {
@@ -1762,7 +1851,7 @@ function renderBuscador() {
     <div class="content-header">
       <div class="search-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input placeholder="Nombre de un tema o artista..." value="${buscadorQ}" oninput="onBuscadorSearch(this.value)">
+        <input id="buscador-input" placeholder="Nombre de un tema o artista..." value="${buscadorQ}" oninput="onBuscadorSearch(this.value)">
         ${buscadorQ ? `<svg onclick="onBuscadorSearch('')" style="cursor:pointer;flex-shrink:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` : ''}
       </div>
     </div>
@@ -1841,8 +1930,18 @@ function renderCortador() {
       <div class="config-section">
         <h3>3. Sensibilidad (opcional, ya viene con valores que funcionan bien)</h3>
         <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--text2)">
-          <label>Umbral de silencio: <input id="cortador-threshold" type="range" min="-60" max="-20" value="-45" step="1" style="vertical-align:middle"> <span id="cortador-threshold-val">-45 dB</span></label>
+          <label style="display:flex;align-items:center;gap:6px"><input id="cortador-auto" type="checkbox" checked onchange="onCortadorAutoToggle()"> Umbral automático (calculado según el ruido de fondo de cada grabación — recomendado)</label>
+          <label>Umbral de silencio: <input id="cortador-threshold" type="range" min="-60" max="-20" value="-45" step="1" disabled style="vertical-align:middle"> <span id="cortador-threshold-val">-45 dB</span></label>
           <label>Duración mínima del hueco: <input id="cortador-mingap" type="range" min="0.5" max="3" value="1.2" step="0.1" style="vertical-align:middle"> <span id="cortador-mingap-val">1.2 s</span></label>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;padding-top:8px;border-top:1px solid var(--border)">
+            <label style="display:flex;align-items:center;gap:6px">Un tema dura entre <input id="cortador-mintrack" type="number" value="2.5" min="0.5" max="20" step="0.5" style="width:50px"> y <input id="cortador-maxtrack" type="number" value="8" min="1" max="30" step="0.5" style="width:50px"> minutos</label>
+          </div>
+          <p style="font-size:11px;color:var(--text3);margin-top:-4px">Si un corte sale más corto que el mínimo, se fusiona con el siguiente (era la propia canción). Si sale más largo que el máximo, se vuelve a buscar el hueco que falta ahí dentro.</p>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;padding-top:8px;border-top:1px solid var(--border)">
+            <label style="display:flex;align-items:center;gap:6px">Recortar del inicio: <input id="cortador-trimstart" type="number" value="0.3" min="0" max="5" step="0.1" style="width:50px"> s</label>
+            <label style="display:flex;align-items:center;gap:6px">Añadir al final: <input id="cortador-padend" type="number" value="1" min="0" max="5" step="0.1" style="width:50px"> s</label>
+          </div>
+          <p style="font-size:11px;color:var(--text3);margin-top:-4px">"Recortar del inicio" salta hacia delante ese tiempo desde donde se detecta sonido, para saltarse el ruido de superficie del surco de entrada antes de que empiece la canción de verdad. Si algún tema empieza sin ese ruido previo, pon 0.</p>
         </div>
       </div>
 
@@ -1864,6 +1963,12 @@ function renderCortador() {
   const mg = document.getElementById('cortador-mingap');
   const mgVal = document.getElementById('cortador-mingap-val');
   if (mg) mg.oninput = () => { mgVal.textContent = mg.value + ' s'; };
+}
+
+function onCortadorAutoToggle() {
+  const auto = document.getElementById('cortador-auto')?.checked;
+  const th = document.getElementById('cortador-threshold');
+  if (th) th.disabled = auto;
 }
 
 function renderSesiones() {
