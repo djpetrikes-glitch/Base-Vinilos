@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.52 — Dj Petrik</title>
+<title>VinylBase v2.53 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.52</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.53</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -951,6 +951,9 @@ async function analyzeCortador() {
     cortadorLogLine('⚠ No se detectó ningún tema. Prueba a bajar el umbral de silencio.');
     return null;
   }
+
+  cortadorLogLine(`🔍 En bruto (antes de fusiones/rescates): ${segments.length} trozos:`);
+  segments.forEach((s, i) => cortadorLogLine(`   ${i+1}. ${fmtDuration(s.startSec)} a ${fmtDuration(s.endSec)} (${fmtDuration(s.endSec - s.startSec)})`));
 
   // Si conocemos duraciones reales de Discogs, ensanchar el rango min/max para que
   // no fusione ni rescate temas que ya sabemos que son legítimamente cortos o largos.
