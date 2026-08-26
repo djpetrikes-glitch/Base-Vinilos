@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.46 — Dj Petrik</title>
+<title>VinylBase v2.47 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.46</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.47</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -910,7 +910,7 @@ async function runCortador() {
     cortadorLogLine('Detectando silencios entre temas...');
     const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
     const thresholdDb = isAuto ? computeAdaptiveThresholdDb(envelope, 4) : manualThresholdDb;
-    if (isAuto) cortadorLogLine(`Umbral automático calculado: ${thresholdDb.toFixed(1)} dB`);
+    cortadorLogLine(isAuto ? `Umbral automático calculado: ${thresholdDb.toFixed(1)} dB` : `Umbral manual: ${thresholdDb} dB`);
     let segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
 
     if (!segments.length) {
@@ -937,7 +937,7 @@ async function runCortador() {
       const writable = await outHandle.createWritable();
       await writable.write(wavBuffer);
       await writable.close();
-      cortadorLogLine(`✓ ${i + 1}.wav — ${fmtDuration(startTrimmed)} a ${fmtDuration(endWithPad)} (${fmtDuration(endWithPad - startTrimmed)})`);
+      cortadorLogLine(`✓ ${i + 1}.wav — detectado en ${seg.startSec.toFixed(2)}s, recortado a ${fmtDuration(startTrimmed)} → ${fmtDuration(endWithPad)} (${fmtDuration(endWithPad - startTrimmed)})`);
     }
     cortadorLogLine(`✓ Listo. ${segments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
     showToast(`✓ ${segments.length} temas cortados y guardados`);
