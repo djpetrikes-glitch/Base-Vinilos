@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.65 — Dj Petrik</title>
+<title>VinylBase v2.66 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -231,7 +231,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.65</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.66</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -945,6 +945,7 @@ async function embedTagsInWav(wavArrayBuffer, expTrack) {
     const releaseId = g(row, COL.release_id);
     if (releaseId) {
       const cleanId = releaseId.toString().slice(0, -1);
+      frames.push(id3TxxxFrame('DISCOGS_RELEASE_ID', cleanId)); // el mismo que usa Mp3tag, ya limpio para la API
       await loadCoverForRow(row); // asegura que coverCache tiene la URL de este disco
       const cover = await getCoverBytes(cleanId);
       if (cover) frames.push(id3ApicFrame(cover.mime, cover.bytes));
