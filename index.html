@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.74 — Dj Petrik</title>
+<title>VinylBase v2.75 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.74</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.75</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -260,6 +260,10 @@
     <button class="nav-item" id="nav-auditoria" onclick="setView('auditoria')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v3l2 2"/></svg>
       Verificar ripeados
+    </button>
+    <button class="nav-item" id="nav-auditoriadigital" onclick="setView('auditoriadigital')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M11 8v3l2 2"/></svg>
+      Verificar digital
     </button>
     <div class="nav-section">DJ</div>
     <button class="nav-item" id="nav-sesiones" onclick="setView('sesiones')">
@@ -2034,6 +2038,96 @@ function renderAuditoriaResultados(r) {
   `;
 }
 
+// ─── VERIFICAR DIGITAL (comparar discos digitales del Sheet contra tu carpeta de música) ──
+// Igual que "Verificar ripeados" pero para lo que NO es vinilo físico: usa el mismo índice
+// de etiquetas ID3 que ya usa "¿Tengo este tema?", así que reconoce los archivos igual de
+// bien (o igual de mal) que el resto de la app — nada nuevo que pueda desajustarse aparte.
+let auditoriaDigitalRunning = false;
+let auditoriaDigitalResults = null; // { totalDigitales, encontrados, faltan: [{idx, row}] }
+
+function isRowPhysical(row) {
+  const fmt = g(row, COL.format).toLowerCase();
+  return fmt.includes('12"') || fmt.includes('7"') || fmt.includes('10"');
+}
+
+async function runAuditoriaDigital() {
+  auditoriaDigitalRunning = true;
+  auditoriaDigitalResults = null;
+  renderAuditoriaDigital();
+  try {
+    if (!musicIndex) {
+      const idx = await ensureMusicIndex();
+      if (!idx) { auditoriaDigitalRunning = false; renderAuditoriaDigital(); return; }
+    }
+
+    const digitales = allData
+      .map((row, idx) => ({ row, idx }))
+      .filter(e => !isRowPhysical(e.row) && (g(e.row, COL.artist) || g(e.row, COL.title)));
+
+    const faltan = digitales.filter(e => matchAllTracksInIndex(e.row, { title: g(e.row, COL.title) }).length === 0);
+
+    auditoriaDigitalResults = {
+      totalDigitales: digitales.length,
+      encontrados: digitales.length - faltan.length,
+      faltan,
+    };
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ Error comprobando: ' + e.message, true);
+  }
+  auditoriaDigitalRunning = false;
+  renderAuditoriaDigital();
+}
+
+function marcarVerificarDesdeAuditoriaDigital(idx) {
+  setDigitalEstado(idx, 'Verificar');
+  if (auditoriaDigitalResults) {
+    auditoriaDigitalResults.faltan = auditoriaDigitalResults.faltan.filter(e => e.idx !== idx);
+  }
+}
+
+function renderAuditoriaDigital() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="content-header">
+      <div style="font-weight:600">🔍 Verificar digital</div>
+    </div>
+    <div style="padding:16px;overflow-y:auto;height:calc(100% - 60px);max-width:720px">
+      <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
+        Compara todo lo que en el Sheet NO está marcado como vinilo físico (12", 7", 10") contra
+        los archivos que hay de verdad en tu carpeta de música, por etiquetas — igual que hace
+        "¿Tengo este tema?". Puede tardar un poco si tienes muchos archivos.
+      </p>
+      <button class="btn btn-accent" style="width:100%;justify-content:center;padding:12px;font-size:14px" ${auditoriaDigitalRunning ? 'disabled' : ''} onclick="runAuditoriaDigital()">
+        ${auditoriaDigitalRunning ? 'Comprobando...' : '🔍 Comprobar ahora'}
+      </button>
+      ${auditoriaDigitalResults ? renderAuditoriaDigitalResultados(auditoriaDigitalResults) : ''}
+    </div>`;
+}
+
+function renderAuditoriaDigitalResultados(r) {
+  return `
+    <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--text2)">
+      💿 ${r.totalDigitales.toLocaleString()} discos digitales en el Sheet · ✓ ${r.encontrados.toLocaleString()} encontrados en tu carpeta
+    </div>
+
+    ${r.faltan.length === 0 ? `<p style="margin-top:14px;font-size:13px;color:var(--accent)">✓ Todos los discos digitales del Sheet se han encontrado en tu carpeta.</p>` : `
+    <div style="margin-top:16px">
+      <div class="d-section" style="margin:0 0 8px">⚠ No se han encontrado en tu carpeta (${r.faltan.length})</div>
+      <p style="font-size:11px;color:var(--text3);margin-bottom:8px">
+        Puede ser que de verdad falten, o que las etiquetas del archivo (título/artista) no coincidan
+        con lo que pone en el Sheet — revísalos a mano antes de darlos por perdidos.
+      </p>
+      <div class="tracklist">
+        ${r.faltan.map(e => `<div class="track-row">
+          <span class="track-title" style="white-space:normal;flex:1">${g(e.row,COL.artist)} — ${g(e.row,COL.title)} <span style="color:var(--text3)">(${g(e.row,COL.catalog)})</span></span>
+          <button class="btn" style="font-size:11px" onclick="marcarVerificarDesdeAuditoriaDigital(${e.idx})">? Marcar "Verificar"</button>
+        </div>`).join('')}
+      </div>
+    </div>`}
+  `;
+}
+
 // ─── REPRODUCIR TEMAS (localizar archivo y sonar en la app) ────────────────────
 function normName(s) {
   return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
@@ -2425,6 +2519,7 @@ function renderView() {
   if (view === 'buscador') { renderBuscador(); return; }
   if (view === 'cortador') { renderCortador(); return; }
   if (view === 'auditoria') { renderAuditoria(); return; }
+  if (view === 'auditoriadigital') { renderAuditoriaDigital(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
