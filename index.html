@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.68 — Dj Petrik</title>
+<title>VinylBase v2.69 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.68</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.69</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2935,10 +2935,10 @@ function renderCortador() {
   if (newPanel) newPanel.scrollTop = prevPanelScrollTop;
 }
 
-// Panel lateral: carátula + nombre + tracklist (A1, A2, B1...) de TODOS los discos de
-// "Discos de esta sesión" a la vez (uno debajo del otro), para tenerlos de referencia
-// visual y poder arrastrar encima pistas ya cortadas por otro medio (se etiquetan y se
-// guardan con el nombre correcto).
+// Panel de la derecha: carátula + nombre + tracklist (A1, A2, B1...) de TODOS los discos
+// de "Discos de esta sesión" a la vez, en cuadros de izquierda a derecha (como una rejilla
+// que salta de línea sola cuando no caben más, ajustándose al ancho de la pantalla), para
+// tenerlos de referencia visual y poder arrastrar encima pistas ya cortadas por otro medio.
 function renderCortadorWorkPanel() {
   if (!cortadorSessionDiscs.length) {
     return `<div class="detail" style="width:280px">
@@ -2953,7 +2953,7 @@ function renderCortadorWorkPanel() {
     const tracks = getTracksForSessionDisc(idx);
     let coverHtml, titleHtml;
     if (entry.manual) {
-      coverHtml = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:22px;height:22px;color:var(--text3)"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
+      coverHtml = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
       titleHtml = `<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${entry.title}</div><div style="font-size:10px;color:var(--text3)">a mano</div>`;
     } else {
       const row = entry.row;
@@ -2962,7 +2962,7 @@ function renderCortadorWorkPanel() {
       const cachedCover = cleanId ? coverCache[cleanId] : undefined;
       coverHtml = cachedCover
         ? `<img src="${cachedCover}" style="width:100%;height:100%;object-fit:cover">`
-        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:22px;height:22px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`;
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`;
       titleHtml = `<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(row, COL.artist)}</div><div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(row, COL.title)}</div>`;
     }
 
@@ -2979,22 +2979,22 @@ function renderCortadorWorkPanel() {
             </div>`).join('')}
         </div>`;
 
-    return `<div style="padding:12px;border-bottom:1px solid var(--border)">
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
-        <div style="width:52px;height:52px;flex-shrink:0;border-radius:4px;overflow:hidden;background:var(--bg3);display:flex;align-items:center;justify-content:center">${coverHtml}</div>
-        <div style="min-width:0;flex:1">
-          <div style="font-size:9px;color:var(--text3);margin-bottom:1px">DISCO ${idx + 1}</div>
-          ${titleHtml}
-        </div>
+    return `<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg3);display:flex;flex-direction:column;min-width:0">
+      <div style="width:100%;aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">${coverHtml}</div>
+      <div style="padding:8px">
+        <div style="font-size:9px;color:var(--text3);margin-bottom:1px">DISCO ${idx + 1}</div>
+        ${titleHtml}
+        <div style="margin-top:8px">${tracksHtml}</div>
       </div>
-      ${tracksHtml}
     </div>`;
   }).join('');
 
-  return `<div class="detail" style="width:280px">
-    <div id="cortador-panel-scroll" style="overflow-y:auto;flex:1">
-      ${cards}
-    </div>
+  // Rejilla de izquierda a derecha: cada cuadro mide como mínimo 160px, y el navegador
+  // decide solo cuántos caben por fila según el ancho disponible — al llegar al último
+  // que cabe, el siguiente salta a la fila de abajo automáticamente. Se recalcula solo
+  // si cambias el tamaño de la ventana, no hace falta tocar nada.
+  return `<div class="detail" id="cortador-panel-scroll" style="width:auto;flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));grid-auto-rows:min-content;gap:12px;padding:12px;align-content:start">
+    ${cards}
   </div>`;
 }
 
