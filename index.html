@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.67 — Dj Petrik</title>
+<title>VinylBase v2.68 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.67</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.68</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -562,10 +562,6 @@ let cortadorRunning = false;
 let cortadorLog = [];
 let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
 let cortadorDiscSearchQ = '';
-
-// Disco "en trabajo": el que se muestra en el panel lateral (carátula + tracklist)
-// para poder arrastrar encima pistas ya cortadas por otro medio y etiquetarlas.
-let cortadorWorkingDiscIdx = null;
 
 // Línea de tiempo de la última vista previa / corte / asociación, para cruzarla con Audition.
 let cortadorTimelineData = null; // { totalDurationSec, segs: [{startSec, endSec, kept, label}] }
@@ -2886,24 +2882,23 @@ function renderCortador() {
         ${cortadorSessionDiscs.length ? `
         <div class="tracklist" style="margin-bottom:8px">
           ${cortadorSessionDiscs.map((e,i) => {
-            const isWorking = cortadorWorkingDiscIdx === i;
             if (e.manual) {
-              return `<div class="track-row" style="cursor:pointer;${isWorking ? 'background:var(--bg3)' : ''}" onclick="selectCortadorWorkingDisc(${i})" title="Ver carátula y temas en el panel de la derecha">
+              return `<div class="track-row">
                 <span class="track-pos">${i+1}</span>
                 <span class="track-title" style="white-space:normal">${e.title} <span style="color:var(--text3)">(a mano)</span></span>
                 <span style="font-size:10px;color:var(--text3)">${e.trackCount} temas</span>
-                <span class="track-origin missing" style="cursor:pointer" onclick="event.stopPropagation();removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
+                <span class="track-origin missing" style="cursor:pointer" onclick="removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
               </div>`;
             }
             const rid = g(e.row, COL.release_id);
             const tl = tracklistCache[rid.toString().slice(0,-1)];
             const has = !!tl;
-            return `<div class="track-row" style="cursor:pointer;${isWorking ? 'background:var(--bg3)' : ''}" onclick="selectCortadorWorkingDisc(${i})" title="Ver carátula y temas en el panel de la derecha">
+            return `<div class="track-row">
               <span class="track-pos">${i+1}</span>
               <span class="track-title" style="white-space:normal">${g(e.row,COL.artist)} — ${g(e.row,COL.title)}</span>
               <span style="font-size:10px;color:var(--text3)">${has ? tl.length+' temas' : 'cargando...'}</span>
-              ${has ? `<label style="font-size:10px;color:var(--text3);display:flex;align-items:center;gap:3px" title="Corrige el número de temas si sabes que Discogs se queda corto" onclick="event.stopPropagation()">real: <input type="number" min="1" value="${e.countOverride || tl.length}" onchange="setCortadorCountOverride(${i}, this.value)" style="width:40px;padding:1px 3px"></label>` : ''}
-              <span class="track-origin missing" style="cursor:pointer" onclick="event.stopPropagation();removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
+              ${has ? `<label style="font-size:10px;color:var(--text3);display:flex;align-items:center;gap:3px" title="Corrige el número de temas si sabes que Discogs se queda corto">real: <input type="number" min="1" value="${e.countOverride || tl.length}" onchange="setCortadorCountOverride(${i}, this.value)" style="width:40px;padding:1px 3px"></label>` : ''}
+              <span class="track-origin missing" style="cursor:pointer" onclick="removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
             </div>`;
           }).join('')}
         </div>
@@ -2940,59 +2935,65 @@ function renderCortador() {
   if (newPanel) newPanel.scrollTop = prevPanelScrollTop;
 }
 
-// Panel lateral: carátula + nombre + tracklist (A1, A2, B1...) del disco seleccionado en
-// "Discos de esta sesión", para tenerlo de referencia visual y poder arrastrar encima
-// pistas ya cortadas por otro medio (se etiquetan y se guardan con el nombre correcto).
+// Panel lateral: carátula + nombre + tracklist (A1, A2, B1...) de TODOS los discos de
+// "Discos de esta sesión" a la vez (uno debajo del otro), para tenerlos de referencia
+// visual y poder arrastrar encima pistas ya cortadas por otro medio (se etiquetan y se
+// guardan con el nombre correcto).
 function renderCortadorWorkPanel() {
-  if (cortadorWorkingDiscIdx == null || !cortadorSessionDiscs[cortadorWorkingDiscIdx]) {
+  if (!cortadorSessionDiscs.length) {
     return `<div class="detail" style="width:280px">
       <div class="state-center" style="padding:40px 16px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-        <p style="text-align:center;font-size:12px">Elige un disco de la sesión<br>para ver aquí su carátula y sus temas</p>
+        <p style="text-align:center;font-size:12px">Añade discos de la sesión (paso 4)<br>para ver aquí sus carátulas y sus temas</p>
       </div>
     </div>`;
   }
-  const idx = cortadorWorkingDiscIdx;
-  const entry = cortadorSessionDiscs[idx];
-  const tracks = getTracksForSessionDisc(idx);
 
-  let coverHtml, titleHtml;
-  if (entry.manual) {
-    coverHtml = `<div class="detail-cover-ph">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-      <span style="font-size:11px">Disco a mano</span>
+  const cards = cortadorSessionDiscs.map((entry, idx) => {
+    const tracks = getTracksForSessionDisc(idx);
+    let coverHtml, titleHtml;
+    if (entry.manual) {
+      coverHtml = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:22px;height:22px;color:var(--text3)"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
+      titleHtml = `<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${entry.title}</div><div style="font-size:10px;color:var(--text3)">a mano</div>`;
+    } else {
+      const row = entry.row;
+      const releaseId = g(row, COL.release_id);
+      const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+      const cachedCover = cleanId ? coverCache[cleanId] : undefined;
+      coverHtml = cachedCover
+        ? `<img src="${cachedCover}" style="width:100%;height:100%;object-fit:cover">`
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:22px;height:22px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`;
+      titleHtml = `<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(row, COL.artist)}</div><div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(row, COL.title)}</div>`;
+    }
+
+    const tracksHtml = tracks.length === 0
+      ? `<div style="font-size:11px;color:var(--text3)">${entry.manual ? '' : 'Cargando canciones de Discogs...'}</div>`
+      : `<div class="tracklist">
+          ${tracks.map((t, ti) => `
+            <div class="track-row cortador-drop-target" style="flex-direction:column;align-items:flex-start;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;margin-bottom:4px;cursor:default"
+                 ondragover="event.preventDefault();event.currentTarget.classList.add('drop-hover')"
+                 ondragleave="event.currentTarget.classList.remove('drop-hover')"
+                 ondrop="handleCortadorTrackDrop(event, ${idx}, ${ti})">
+              <span class="track-title" style="white-space:normal;font-weight:500">${t.position ? t.position + ' — ' : ''}${t.title}</span>
+              ${t.durationSec != null ? `<span style="font-size:10px;color:var(--text3)">${fmtDuration(t.durationSec)}</span>` : ''}
+            </div>`).join('')}
+        </div>`;
+
+    return `<div style="padding:12px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+        <div style="width:52px;height:52px;flex-shrink:0;border-radius:4px;overflow:hidden;background:var(--bg3);display:flex;align-items:center;justify-content:center">${coverHtml}</div>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:9px;color:var(--text3);margin-bottom:1px">DISCO ${idx + 1}</div>
+          ${titleHtml}
+        </div>
+      </div>
+      ${tracksHtml}
     </div>`;
-    titleHtml = `<div class="d-artist">${entry.title}</div>`;
-  } else {
-    const row = entry.row;
-    const releaseId = g(row, COL.release_id);
-    const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
-    const cachedCover = cleanId ? coverCache[cleanId] : undefined;
-    coverHtml = cachedCover
-      ? `<img src="${cachedCover}" style="width:100%;height:100%;object-fit:cover">`
-      : (cachedCover === null
-          ? `<div class="detail-cover-ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg><span style="font-size:11px">Sin carátula</span></div>`
-          : `<div class="detail-cover-ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6" stroke-dasharray="2 4"/></svg><span style="font-size:11px">Cargando carátula...</span></div>`);
-    titleHtml = `<div class="d-artist">${g(row, COL.artist)}</div><div class="d-title">${g(row, COL.title)}</div>`;
-  }
+  }).join('');
 
   return `<div class="detail" style="width:280px">
-    <div class="detail-cover">${coverHtml}</div>
-    <div class="detail-body" id="cortador-panel-scroll" style="overflow-y:auto">
-      ${titleHtml}
-      <div class="d-section">Temas — arrastra aquí una pista ya cortada</div>
-      ${tracks.length === 0
-        ? `<div style="font-size:11px;color:var(--text3)">${entry.manual ? '' : 'Cargando canciones de Discogs...'}</div>`
-        : `<div class="tracklist">
-            ${tracks.map((t, ti) => `
-              <div class="track-row cortador-drop-target" style="flex-direction:column;align-items:flex-start;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;margin-bottom:4px;cursor:default"
-                   ondragover="event.preventDefault();event.currentTarget.classList.add('drop-hover')"
-                   ondragleave="event.currentTarget.classList.remove('drop-hover')"
-                   ondrop="handleCortadorTrackDrop(event, ${idx}, ${ti})">
-                <span class="track-title" style="white-space:normal;font-weight:500">${t.position ? t.position + ' — ' : ''}${t.title}</span>
-                ${t.durationSec != null ? `<span style="font-size:10px;color:var(--text3)">${fmtDuration(t.durationSec)}</span>` : ''}
-              </div>`).join('')}
-          </div>`}
+    <div id="cortador-panel-scroll" style="overflow-y:auto;flex:1">
+      ${cards}
     </div>
   </div>`;
 }
@@ -3088,7 +3089,6 @@ async function addCortadorSessionDisc(idx) {
   if (!releaseId) { showToast('⚠ Este disco no tiene release_id de Discogs', true); return; }
   cortadorSessionDiscs.push({ row });
   cortadorDiscSearchQ = '';
-  cortadorWorkingDiscIdx = cortadorSessionDiscs.length - 1; // lo dejamos seleccionado en el panel lateral
   renderCortador();
   await loadCoverForRow(row); // esto ya trae y cachea el tracklist con duraciones
   renderCortador();
@@ -3096,13 +3096,6 @@ async function addCortadorSessionDisc(idx) {
 
 function removeCortadorSessionDisc(i) {
   cortadorSessionDiscs.splice(i, 1);
-  if (cortadorWorkingDiscIdx === i) cortadorWorkingDiscIdx = null;
-  else if (cortadorWorkingDiscIdx != null && cortadorWorkingDiscIdx > i) cortadorWorkingDiscIdx--;
-  renderCortador();
-}
-
-function selectCortadorWorkingDisc(i) {
-  cortadorWorkingDiscIdx = (cortadorWorkingDiscIdx === i) ? null : i;
   renderCortador();
 }
 
@@ -3189,7 +3182,6 @@ async function addCortadorManualDisc() {
   if (!name) { showToast('⚠ Escribe un nombre para el disco', true); return; }
   if (!count || count < 1) { showToast('⚠ Indica cuántos temas tiene', true); return; }
   cortadorSessionDiscs.push({ manual: true, title: name, trackCount: count });
-  cortadorWorkingDiscIdx = cortadorSessionDiscs.length - 1;
   renderCortador();
 }
 
