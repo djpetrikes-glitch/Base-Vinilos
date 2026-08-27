@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.82 — Dj Petrik</title>
+<title>VinylBase v2.83 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.82</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.83</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1522,6 +1522,35 @@ function buildTimelineHtml(totalDurationSec, segs) {
   </div>`;
 }
 
+// El archivo grande a veces no se puede leer al primer intento — típicamente porque el
+// programa de grabación (o el antivirus, o un disco externo lento) todavía lo tiene
+// tocado en ese instante. En vez de rendirse a la primera, esperamos un poco y reintentamos.
+async function readCortadorFileWithRetry(intentos = 3) {
+  let ultimoError;
+  for (let i = 0; i < intentos; i++) {
+    try {
+      const file = await cortadorFileHandle.getFile();
+      return await file.arrayBuffer();
+    } catch(e) {
+      ultimoError = e;
+      if (i < intentos - 1) {
+        cortadorLogLine(`⚠ No se pudo leer el archivo todavía (intento ${i + 1}/${intentos}) — puede que otro programa lo esté usando. Reintentando en ${i + 1}s...`);
+        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+      }
+    }
+  }
+  throw ultimoError;
+}
+
+// Traduce los errores más crípticos del navegador a algo que de verdad se entienda.
+function explicarErrorCortador(e) {
+  const msg = e && e.message ? e.message : String(e);
+  if (/permission problems/i.test(msg)) {
+    return 'No se pudo leer el archivo — algo más lo tenía abierto en ese momento (el programa de grabación, un antivirus, o un disco externo lento). Espera unos segundos y vuelve a intentarlo; si sigue igual, vuelve a elegir el archivo con "Elegir archivo WAV".';
+  }
+  return msg;
+}
+
 // Analiza el WAV y devuelve los segmentos ya calculados con los márgenes aplicados,
 // SIN escribir ningún archivo. La usan tanto la vista previa como el guardado real.
 async function analyzeCortadorRaw() {
@@ -1535,8 +1564,7 @@ async function analyzeCortadorRaw() {
   const padEndSec = cortadorSettings.padEndSec;
 
   cortadorLogLine('Leyendo el archivo...');
-  const file = await cortadorFileHandle.getFile();
-  const buffer = await file.arrayBuffer();
+  const buffer = await readCortadorFileWithRetry();
 
   cortadorLogLine('Analizando el WAV...');
   const { fmt, dataOffset, dataLength } = parseWavHeader(buffer);
@@ -1711,7 +1739,7 @@ async function previewCortador() {
     }
   } catch(e) {
     console.error(e);
-    cortadorLogLine('⚠ Error: ' + e.message);
+    cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
   }
   cortadorRunning = false;
   renderCortador();
@@ -1732,7 +1760,7 @@ async function startCortadorAssociation() {
     cortadorLogLine('Sugerencia de asociación calculada. Revísala abajo y corrige lo que haga falta antes de guardar.');
   } catch(e) {
     console.error(e);
-    cortadorLogLine('⚠ Error: ' + e.message);
+    cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
   }
   cortadorRunning = false;
   renderCortador();
@@ -1830,7 +1858,7 @@ async function confirmCortadorAssociation() {
     abrirAyudanteCaratulas();
   } catch(e) {
     console.error(e);
-    cortadorLogLine('⚠ Error: ' + e.message);
+    cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
     showToast('⚠ Error al procesar el WAV', true);
   }
   cortadorRunning = false;
@@ -1883,7 +1911,7 @@ async function runCortador() {
     abrirAyudanteCaratulas();
   } catch(e) {
     console.error(e);
-    cortadorLogLine('⚠ Error: ' + e.message);
+    cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
     showToast('⚠ Error al procesar el WAV', true);
   }
   cortadorRunning = false;
