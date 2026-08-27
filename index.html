@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.83 — Dj Petrik</title>
+<title>VinylBase v2.85 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.83</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.85</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -727,10 +727,37 @@ function computeAdaptiveThresholdDb(envelope, marginDb) {
   return noiseFloorDb + marginDb;
 }
 
-function detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec) {
-  const threshold = Math.pow(10, thresholdDb / 20);
+// Igual que computeAdaptiveThresholdDb, pero recalculado tramo a tramo cada N minutos de
+// la grabación en vez de un único valor para todo el archivo — para sesiones donde vas
+// cambiando de vinilo, y cada disco tiene un suelo de ruido distinto (más flojo, más
+// sucio...), el umbral se reajusta solo en cada tramo sin que tengas que tocar nada.
+function computeAdaptiveThresholdPerChunk(envelope, windowMs, marginDb, chunkMinutes) {
+  const chunkWindows = Math.max(1, Math.round((chunkMinutes * 60 * 1000) / windowMs));
+  const numChunks = Math.max(1, Math.ceil(envelope.length / chunkWindows));
+  const thresholds = [];
+  for (let c = 0; c < numChunks; c++) {
+    const start = c * chunkWindows;
+    const end = Math.min(envelope.length, start + chunkWindows);
+    thresholds.push(computeAdaptiveThresholdDb(envelope.subarray(start, end), marginDb));
+  }
+  return { thresholds, chunkWindows };
+}
+
+function detectSegments(envelope, windowMs, thresholdInfo, minSilenceSec, totalDurationSec) {
   const minSilenceWindows = Math.max(1, Math.ceil((minSilenceSec * 1000) / windowMs));
-  const isSilent = envelope.map(v => v < threshold);
+
+  // thresholdInfo puede ser un número suelto (umbral manual, igual para todo el archivo)
+  // o { thresholds, chunkWindows } del cálculo por tramos (modo automático).
+  let thresholdLinearAt;
+  if (typeof thresholdInfo === 'number') {
+    const t = Math.pow(10, thresholdInfo / 20);
+    thresholdLinearAt = () => t;
+  } else {
+    const linear = thresholdInfo.thresholds.map(db => Math.pow(10, db / 20));
+    const { chunkWindows } = thresholdInfo;
+    thresholdLinearAt = (i) => linear[Math.min(linear.length - 1, Math.floor(i / chunkWindows))];
+  }
+  const isSilent = envelope.map((v, i) => v < thresholdLinearAt(i));
 
   const silenceRegions = [];
   let i = 0;
@@ -1524,8 +1551,10 @@ function buildTimelineHtml(totalDurationSec, segs) {
 
 // El archivo grande a veces no se puede leer al primer intento — típicamente porque el
 // programa de grabación (o el antivirus, o un disco externo lento) todavía lo tiene
-// tocado en ese instante. En vez de rendirse a la primera, esperamos un poco y reintentamos.
-async function readCortadorFileWithRetry(intentos = 3) {
+// tocado en ese instante, o porque está en una carpeta de OneDrive/SharePoint y Windows
+// todavía no lo ha bajado del todo (archivo "solo en la nube"). En vez de rendirse a la
+// primera, esperamos y reintentamos varias veces, dando más margen cada vez.
+async function readCortadorFileWithRetry(intentos = 6) {
   let ultimoError;
   for (let i = 0; i < intentos; i++) {
     try {
@@ -1534,8 +1563,9 @@ async function readCortadorFileWithRetry(intentos = 3) {
     } catch(e) {
       ultimoError = e;
       if (i < intentos - 1) {
-        cortadorLogLine(`⚠ No se pudo leer el archivo todavía (intento ${i + 1}/${intentos}) — puede que otro programa lo esté usando. Reintentando en ${i + 1}s...`);
-        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+        const espera = Math.min(10, (i + 1) * 2); // 2, 4, 6, 8, 10s
+        cortadorLogLine(`⚠ No se pudo leer el archivo todavía (intento ${i + 1}/${intentos}). Reintentando en ${espera}s...`);
+        await new Promise(r => setTimeout(r, espera * 1000));
       }
     }
   }
@@ -1546,7 +1576,7 @@ async function readCortadorFileWithRetry(intentos = 3) {
 function explicarErrorCortador(e) {
   const msg = e && e.message ? e.message : String(e);
   if (/permission problems/i.test(msg)) {
-    return 'No se pudo leer el archivo — algo más lo tenía abierto en ese momento (el programa de grabación, un antivirus, o un disco externo lento). Espera unos segundos y vuelve a intentarlo; si sigue igual, vuelve a elegir el archivo con "Elegir archivo WAV".';
+    return 'No se pudo leer el archivo después de varios intentos. Las causas más probables: (1) el programa de grabación aún no lo ha soltado del todo, (2) está en una carpeta de OneDrive/SharePoint y Windows todavía no lo ha bajado del todo a tu disco (mira si el icono de la nube en el explorador de archivos sigue con la flecha de sincronización), o (3) un antivirus lo está escaneando por ser un archivo grande. Espera un poco más y vuelve a elegir el archivo con "Elegir archivo WAV".';
   }
   return msg;
 }
@@ -1573,9 +1603,16 @@ async function analyzeCortadorRaw() {
 
   cortadorLogLine('Detectando silencios entre temas...');
   const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
-  const thresholdDb = isAuto ? computeAdaptiveThresholdDb(envelope, 4) : manualThresholdDb;
-  cortadorLogLine(isAuto ? `Umbral automático calculado: ${thresholdDb.toFixed(1)} dB` : `Umbral manual: ${thresholdDb} dB`);
-  let segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
+  let thresholdInfo;
+  if (isAuto) {
+    thresholdInfo = computeAdaptiveThresholdPerChunk(envelope, windowMs, 4, 5);
+    const resumenTramos = thresholdInfo.thresholds.map(db => db.toFixed(1)).join(', ');
+    cortadorLogLine(`Umbral automático recalculado cada 5 min (${thresholdInfo.thresholds.length} tramo(s)): ${resumenTramos} dB`);
+  } else {
+    thresholdInfo = manualThresholdDb;
+    cortadorLogLine(`Umbral manual: ${manualThresholdDb} dB`);
+  }
+  let segments = detectSegments(envelope, windowMs, thresholdInfo, minSilenceSec, totalDurationSec);
   const rawDetectedSegments = segments.map(s => ({ ...s })); // copia tal cual detectado, antes de fusiones/descartes — para la línea de tiempo
 
   if (!segments.length) {
