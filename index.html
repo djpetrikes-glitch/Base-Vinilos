@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.78 — Dj Petrik</title>
+<title>VinylBase v2.81 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.78</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.81</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1718,6 +1718,23 @@ function setCortadorAssignment(idx, value) {
   renderCortador();
 }
 
+// Deja tocar a mano dónde empieza/acaba cada trozo detectado — lo que quede aquí es
+// literalmente lo que se cortará al confirmar, así que puedes ajustar el punto exacto
+// si el programa se ha pasado o se ha quedado corto, y escucharlo con ▶ para comprobar.
+function setCortadorSegmentTime(idx, campo, valor) {
+  const d = cortadorAssocData;
+  if (!d) return;
+  const seg = d.segments[idx];
+  if (!seg) return;
+  const v = parseFloat(valor);
+  if (isNaN(v) || v < 0) { showToast('⚠ Ese tiempo no es válido', true); renderCortador(); return; }
+  if (v > d.totalDurationSec) { showToast('⚠ Eso está fuera de la duración del WAV', true); renderCortador(); return; }
+  if (campo === 'startSec' && v >= seg.endSec) { showToast('⚠ El inicio no puede ser después (o igual) que el final', true); renderCortador(); return; }
+  if (campo === 'endSec' && v <= seg.startSec) { showToast('⚠ El final no puede ser antes (o igual) que el inicio', true); renderCortador(); return; }
+  seg[campo] = v;
+  renderCortador();
+}
+
 function cancelCortadorAssociation() {
   stopCortadorPreview();
   cortadorAssocActive = false;
@@ -2102,6 +2119,16 @@ function irAFichaDesdeAuditoria(idx) {
   window.open(url, '_blank');
 }
 
+// Abre la ficha del release en Discogs, en pestaña nueva — igual que el enlace que ya usa
+// el resto de la app (le quitamos el dígito extra que se guarda al final del release_id).
+function irADiscogsDesdeAuditoria(idx) {
+  const row = allData[idx];
+  if (!row) return;
+  const releaseId = g(row, COL.release_id);
+  if (!releaseId) { showToast('⚠ Este disco no tiene release_id de Discogs guardado', true); return; }
+  window.open(`https://www.discogs.com/release/${releaseId.slice(0, -1)}`, '_blank');
+}
+
 async function borrarDeAuditoriaDigital(idx) {
   const row = allData[idx];
   if (!row) return;
@@ -2167,6 +2194,7 @@ function renderAuditoriaDigitalResultados(r) {
         ${r.faltan.map(e => `<div class="track-row">
           <span class="track-title" style="white-space:normal;flex:1">${g(e.row,COL.artist)} — ${g(e.row,COL.title)} <span style="color:var(--text3)">(${g(e.row,COL.catalog)})</span></span>
           <button class="btn" style="font-size:11px" onclick="irAFichaDesdeAuditoria(${e.idx})" title="Abre el Google Sheet real en esa fila, en una pestaña nueva">📄 Ver en Sheet</button>
+          <button class="btn" style="font-size:11px" onclick="irADiscogsDesdeAuditoria(${e.idx})" title="Abre la ficha del release en Discogs">🔗 Ver en Discogs</button>
           <button class="btn" style="font-size:11px" onclick="marcarVerificarDesdeAuditoriaDigital(${e.idx})">? Marcar "Verificar"</button>
           <button class="btn" style="font-size:11px;color:#c0392b" onclick="borrarDeAuditoriaDigital(${e.idx})" title="Borra esta línea del Sheet — solo si sabes seguro que ya no la tienes">🗑 Borrar del Sheet</button>
         </div>`).join('')}
@@ -2482,10 +2510,9 @@ function isDigital(row) {
   const fuente = g(row, COL.fuente).toLowerCase();
   const filename = g(row, COL.filename);
   const destDigital = g(row, COL.digital_estado).toLowerCase();
-  const fmt = g(row, COL.format).toLowerCase();
-  const isPhysical = fmt.includes('12"') || fmt.includes('7"') || fmt.includes('10"') || fuente === 'discogs';
-  // Digital nativo (Engine DJ) O vinilo con digital confirmado
-  return fuente === 'engine dj' || filename !== '' || (isPhysical && destDigital === 'confirmado');
+  // Digital nativo (Engine DJ), O ya ripeado con nombre de archivo, O confirmado como
+  // "tengo la copia digital" — sea o no también un vinilo físico a la vez.
+  return fuente === 'engine dj' || filename !== '' || destDigital === 'confirmado';
 }
 
 function getVinyls() {
@@ -2884,6 +2911,7 @@ function renderDetail(row) {
         <div class="dest-opt ${dEst==='Verificar'?'on-verificar':''}" onclick="setDigitalEstado(${allData.indexOf(row)},'Verificar')">? Verificar</div>
         <div class="dest-opt ${dEst==='No'?'on-no':''}" onclick="setDigitalEstado(${allData.indexOf(row)},'No')">✕ No tengo</div>
       </div>
+      ${isVinyl(row) ? `<button class="btn" style="font-size:11px;color:#c0392b;margin-top:6px" onclick="reclasificarComoDigital(${allData.indexOf(row)})" title="Para discos que en realidad nunca fueron vinilo — se metieron en Discogs como si lo fueran hace tiempo">🔁 Esto no era vinilo de verdad — reclasificar a digital</button>` : ''}
 
       <div class="d-section">Ubicación Kallax</div>
       ${renderKallax(g(row, COL.kallax_slot), 'setKallaxSlot.bind(null,' + allData.indexOf(row) + ')')}
@@ -3438,7 +3466,9 @@ function renderCortadorAssocEditor() {
       <p style="font-size:12px;color:var(--text2);margin-bottom:10px">
         Para cada trozo detectado, dale a ▶ para escucharlo y di a qué tema de Discogs corresponde
         (ya viene con una sugerencia puesta, y tienes la carátula y la lista de temas a la derecha
-        de referencia). Si dos trozos apuntan al mismo tema, se fusionan. Si un trozo no corresponde
+        de referencia). Los dos números de tiempo son editables — si el corte se ha pasado o se ha
+        quedado corto, cámbialos a mano y vuelve a darle a ▶ para comprobarlo; eso es exactamente lo
+        que se guardará. Si dos trozos apuntan al mismo tema, se fusionan. Si un trozo no corresponde
         a ningún tema, dile "Descartar".
       </p>
 
@@ -3453,9 +3483,14 @@ function renderCortadorAssocEditor() {
         ${segments.map((seg, i) => {
           const dur = seg.endSec - seg.startSec;
           return `<div class="track-row" style="align-items:center;flex-wrap:wrap">
-            <button class="btn" style="font-size:12px;padding:4px 9px" onclick="playCortadorSegment(${seg.startSec}, ${seg.endSec})" title="Escuchar este trozo tal cual se detectó">▶</button>
+            <button class="btn" style="font-size:12px;padding:4px 9px" onclick="playCortadorSegment(${seg.startSec}, ${seg.endSec})" title="Escuchar este trozo tal cual está ahora mismo">▶</button>
             <span class="track-pos" style="min-width:20px">${i+1}</span>
-            <span style="font-size:11px;color:var(--text3);min-width:150px">${fmtDuration(seg.startSec)} a ${fmtDuration(seg.endSec)} (${fmtDuration(dur)})</span>
+            <span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--text3)">
+              <input type="number" step="0.1" min="0" value="${seg.startSec.toFixed(1)}" title="Inicio (segundos)" style="width:60px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px" onchange="setCortadorSegmentTime(${i}, 'startSec', this.value)">
+              →
+              <input type="number" step="0.1" min="0" value="${seg.endSec.toFixed(1)}" title="Fin (segundos)" style="width:60px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px" onchange="setCortadorSegmentTime(${i}, 'endSec', this.value)">
+              <span style="white-space:nowrap">(${fmtDuration(dur)})</span>
+            </span>
             <select onchange="setCortadorAssignment(${i}, this.value)" style="flex:1;min-width:180px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text);font-size:12px">
               <option value="-1" ${assignments[i] === -1 ? 'selected' : ''}>— Descartar (ruido) —</option>
               ${expected.map((t, ei) => `<option value="${ei}" ${assignments[i] === ei ? 'selected' : ''}>${t.position ? t.position + ' — ' : ''}${t.title}${t.durationSec != null ? ' (' + fmtDuration(t.durationSec) + ')' : ''}</option>`).join('')}
@@ -3756,6 +3791,25 @@ function setDigitalEstado(idx, estado) {
   showToast(cleared ? 'Estado digital borrado' : 'Estado digital actualizado');
 }
 
+// Para discos que en su día se apuntaron en Discogs como si fueran vinilo de verdad, pero
+// que en realidad siempre fueron digitales — al confirmarlo, deja de contar como vinilo
+// (sale de "Vinilos") y pasa a contar solo como digital. Acción aparte y con confirmación
+// porque, a diferencia de "✓ Tengo" (que no toca esto), aquí sí se reescribe el formato.
+function reclasificarComoDigital(idx) {
+  const row = allData[idx];
+  if (!row) return;
+  const nombre = `${g(row, COL.artist)} — ${g(row, COL.title)}`;
+  if (!confirm(`¿Reclasificar "${nombre}" como digital?\n\nDejará de aparecer en Vinilos y pasará a Digital. Úsalo solo si sabes seguro que nunca fue un vinilo real — de los que se apuntaron en Discogs por error hace tiempo.`)) return;
+  row[COL.format] = 'Digital';
+  row[COL.fuente] = 'Digital';
+  row[COL.digital_estado] = 'Confirmado';
+  selectedRow = row;
+  renderStats();
+  renderView();
+  saveToSheet(idx);
+  showToast('✓ Reclasificado — ahora solo aparece en Digital');
+}
+
 async function postToSheet(row, fields) {
   return fetch(APPS_SCRIPT_URL, {
     method: 'POST',
@@ -3826,6 +3880,8 @@ async function saveToSheet(idx) {
     { col: COL.formato_rip,    value: row[COL.formato_rip]    || '' },
     { col: COL.limpio,         value: row[COL.limpio]         || '' },
     { col: COL.fecha_limpieza, value: row[COL.fecha_limpieza] || '' },
+    { col: COL.format,         value: row[COL.format]         || '' },
+    { col: COL.fuente,         value: row[COL.fuente]         || '' },
   ];
   showToast('Guardando...');
   try {
