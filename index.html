@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.85 — Dj Petrik</title>
+<title>VinylBase v2.86 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.85</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.86</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1550,6 +1550,29 @@ function buildTimelineHtml(totalDurationSec, segs) {
 }
 
 // El archivo grande a veces no se puede leer al primer intento — típicamente porque el
+// Lee el archivo a trozos (256 MB cada vez) en vez de de un tirón con file.arrayBuffer().
+// Con WAV grandes de verdad (sesiones de 2h+ pueden ser 1,5-3 GB), pedirlo todo de golpe
+// es precisamente lo que dispara el error de "permission problems" de Chrome — a trozos
+// es más fiable, y de paso deja ver el progreso mientras lee.
+async function readFileInChunks(file, chunkBytes = 256 * 1024 * 1024) {
+  const total = file.size;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  let ultimoPorcentajeMostrado = -1;
+  while (offset < total) {
+    const end = Math.min(total, offset + chunkBytes);
+    const chunkBuf = await file.slice(offset, end).arrayBuffer();
+    out.set(new Uint8Array(chunkBuf), offset);
+    offset = end;
+    const porcentaje = Math.floor((offset / total) * 100);
+    if (porcentaje >= ultimoPorcentajeMostrado + 10 || offset === total) {
+      cortadorLogLine(`  Leyendo... ${porcentaje}% (${(offset / 1024 / 1024).toFixed(0)} / ${(total / 1024 / 1024).toFixed(0)} MB)`);
+      ultimoPorcentajeMostrado = porcentaje;
+    }
+  }
+  return out.buffer;
+}
+
 // programa de grabación (o el antivirus, o un disco externo lento) todavía lo tiene
 // tocado en ese instante, o porque está en una carpeta de OneDrive/SharePoint y Windows
 // todavía no lo ha bajado del todo (archivo "solo en la nube"). En vez de rendirse a la
@@ -1559,7 +1582,7 @@ async function readCortadorFileWithRetry(intentos = 6) {
   for (let i = 0; i < intentos; i++) {
     try {
       const file = await cortadorFileHandle.getFile();
-      return await file.arrayBuffer();
+      return await readFileInChunks(file);
     } catch(e) {
       ultimoError = e;
       if (i < intentos - 1) {
