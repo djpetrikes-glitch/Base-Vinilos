@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.69 — Dj Petrik</title>
+<title>VinylBase v2.70 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.69</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.70</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2918,6 +2918,11 @@ function renderCortador() {
         onclick="runCortador()">
         ${cortadorRunning ? 'Procesando...' : '✂️ Cortar y guardar'}
       </button>
+
+      <a href="vinylbase-caratulas:run" class="btn" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px;text-decoration:none;box-sizing:border-box" title="Abre el programa 'Poner Carátulas' de tu PC (tiene que estar instalado y registrado una vez — ver el botón de ayuda)">
+        🎨 Poner carátulas (abre el ayudante de tu PC)
+      </a>
+      <p style="font-size:11px;color:var(--text3);margin-top:6px">Esto abre el programa "Poner Carátulas" que tengas instalado en tu PC — hace falta haberlo ejecutado una vez para que se registre. Si no lo tienes, no pasa nada: el navegador simplemente no sabrá qué abrir.</p>
 
       ${cortadorTimelineData ? buildTimelineHtml(cortadorTimelineData.totalDurationSec, cortadorTimelineData.segs) : ''}
 
