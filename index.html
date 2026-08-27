@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.75 — Dj Petrik</title>
+<title>VinylBase v2.76 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.75</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.76</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2086,6 +2086,38 @@ function marcarVerificarDesdeAuditoriaDigital(idx) {
   }
 }
 
+// Para cuando sabes seguro que ese disco ya no lo tienes y no tiene sentido dejarlo en el
+// Sheet. Pide confirmación (no hay deshacer), borra, y comprueba que de verdad desapareció
+// antes de darlo por hecho — igual que el guardado normal, pero al revés.
+async function borrarDeAuditoriaDigital(idx) {
+  const row = allData[idx];
+  if (!row) return;
+  const nombre = `${g(row, COL.artist)} — ${g(row, COL.title)}`;
+  if (!confirm(`¿Seguro que quieres borrar esta línea del Sheet?\n\n${nombre}\n\nEsto no se puede deshacer.`)) return;
+
+  showToast('Borrando...');
+  try {
+    await deleteFromSheet(row);
+    await new Promise(r => setTimeout(r, 1200));
+    let ok = await verifyDeleted(row);
+    if (!ok) {
+      await deleteFromSheet(row);
+      await new Promise(r => setTimeout(r, 1200));
+      ok = await verifyDeleted(row);
+    }
+    if (ok) {
+      showToast('✓ Línea borrada del Sheet');
+      auditoriaDigitalResults = null; // los índices ya no valen tras recargar — toca comprobar de nuevo
+      await reloadData();
+    } else {
+      showToast('⚠ No se pudo confirmar el borrado — puede que tu Apps Script aún no sepa borrar filas', true);
+    }
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ Error borrando', true);
+  }
+}
+
 function renderAuditoriaDigital() {
   const main = document.getElementById('main-content');
   main.innerHTML = `
@@ -2122,6 +2154,7 @@ function renderAuditoriaDigitalResultados(r) {
         ${r.faltan.map(e => `<div class="track-row">
           <span class="track-title" style="white-space:normal;flex:1">${g(e.row,COL.artist)} — ${g(e.row,COL.title)} <span style="color:var(--text3)">(${g(e.row,COL.catalog)})</span></span>
           <button class="btn" style="font-size:11px" onclick="marcarVerificarDesdeAuditoriaDigital(${e.idx})">? Marcar "Verificar"</button>
+          <button class="btn" style="font-size:11px;color:#c0392b" onclick="borrarDeAuditoriaDigital(${e.idx})" title="Borra esta línea del Sheet — solo si sabes seguro que ya no la tienes">🗑 Borrar del Sheet</button>
         </div>`).join('')}
       </div>
     </div>`}
@@ -3733,6 +3766,34 @@ async function verifySaved(row, fields) {
     const match = dataRows.find(r => String(r[COL.release_id] ?? '').trim() === releaseId);
     if (!match) return false;
     return fields.every(f => String(match[f.col] ?? '').trim() === String(f.value ?? '').trim());
+  } catch(e) {
+    return false;
+  }
+}
+
+// ⚠ Requiere que tu Apps Script reconozca action:'delete' y borre esa fila — si tu script
+// actual solo sabe actualizar campos, esto no hará nada hasta que se lo añadas (pídele a
+// Claude que te escriba ese trozo si hace falta, pasándole tu código de Apps Script actual).
+async function deleteFromSheet(row) {
+  return fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({
+      releaseId: g(row, COL.release_id),
+      action: 'delete',
+    }),
+  });
+}
+
+async function verifyDeleted(row) {
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, { method: 'GET' });
+    const json = await res.json();
+    if (!json.ok) return false;
+    const releaseId = g(row, COL.release_id);
+    const dataRows = json.data.slice(1);
+    return !dataRows.some(r => String(r[COL.release_id] ?? '').trim() === releaseId);
   } catch(e) {
     return false;
   }
