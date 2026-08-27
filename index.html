@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.77 — Dj Petrik</title>
+<title>VinylBase v2.78 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.77</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.78</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2091,18 +2091,15 @@ function marcarVerificarDesdeAuditoriaDigital(idx) {
 // antes de darlo por hecho — igual que el guardado normal, pero al revés.
 // Te lleva directo a la ficha completa de esa línea (en Vinilos o Digital, según toque)
 // para que la juzgues tú con toda la información delante antes de borrar o marcar nada.
+// Abre el Google Sheet real en una pestaña nueva, ya colocado en la fila exacta de ese
+// disco — para juzgarlo con los datos en crudo, tal cual están guardados, sin pasar por
+// la app. La fila se calcula por su posición en allData (+2: cabecera + índice a 1), así
+// que si el Sheet se ha tocado a mano por fuera de la app desde la última recarga, puede
+// quedar desviada una fila o dos — pero deja en la zona correcta igualmente.
 function irAFichaDesdeAuditoria(idx) {
-  const row = allData[idx];
-  if (!row) return;
-  view = isVinyl(row) ? 'vinilos' : 'digital';
-  filterStatus = 'all';
-  filterGenre = '';
-  filterDigital = 'all';
-  searchQ = '';
-  selectedRow = row;
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  document.getElementById('nav-' + view)?.classList.add('active');
-  renderView();
+  const rowNum = idx + 2;
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=540728476&range=A${rowNum}`;
+  window.open(url, '_blank');
 }
 
 async function borrarDeAuditoriaDigital(idx) {
@@ -2169,7 +2166,7 @@ function renderAuditoriaDigitalResultados(r) {
       <div class="tracklist">
         ${r.faltan.map(e => `<div class="track-row">
           <span class="track-title" style="white-space:normal;flex:1">${g(e.row,COL.artist)} — ${g(e.row,COL.title)} <span style="color:var(--text3)">(${g(e.row,COL.catalog)})</span></span>
-          <button class="btn" style="font-size:11px" onclick="irAFichaDesdeAuditoria(${e.idx})" title="Ver la ficha completa antes de decidir">👁 Ver ficha</button>
+          <button class="btn" style="font-size:11px" onclick="irAFichaDesdeAuditoria(${e.idx})" title="Abre el Google Sheet real en esa fila, en una pestaña nueva">📄 Ver en Sheet</button>
           <button class="btn" style="font-size:11px" onclick="marcarVerificarDesdeAuditoriaDigital(${e.idx})">? Marcar "Verificar"</button>
           <button class="btn" style="font-size:11px;color:#c0392b" onclick="borrarDeAuditoriaDigital(${e.idx})" title="Borra esta línea del Sheet — solo si sabes seguro que ya no la tienes">🗑 Borrar del Sheet</button>
         </div>`).join('')}
