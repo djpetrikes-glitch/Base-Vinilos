@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.66 — Dj Petrik</title>
+<title>VinylBase v2.67 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -190,6 +190,7 @@
   .tracklist { display: flex; flex-direction: column; gap: 2px; }
   .track-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 4px; cursor: pointer; transition: background .15s; }
   .track-row:hover { background: var(--bg3); }
+  .cortador-drop-target.drop-hover { background: var(--accent) !important; opacity: .8; border-color: var(--accent) !important; }
   .track-play { width: 12px; height: 12px; color: var(--accent); flex-shrink: 0; }
   .track-pos { font-size: 10px; color: var(--text3); font-family: monospace; min-width: 22px; flex-shrink: 0; }
   .track-title { font-size: 11px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -231,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.66</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.67</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -561,6 +562,13 @@ let cortadorRunning = false;
 let cortadorLog = [];
 let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
 let cortadorDiscSearchQ = '';
+
+// Disco "en trabajo": el que se muestra en el panel lateral (carátula + tracklist)
+// para poder arrastrar encima pistas ya cortadas por otro medio y etiquetarlas.
+let cortadorWorkingDiscIdx = null;
+
+// Línea de tiempo de la última vista previa / corte / asociación, para cruzarla con Audition.
+let cortadorTimelineData = null; // { totalDurationSec, segs: [{startSec, endSec, kept, label}] }
 
 // Modo de revisión/asociación manual: cuando está activo, se para justo antes de
 // guardar y deja que el usuario diga a mano qué trozo va con qué tema de Discogs.
@@ -960,6 +968,130 @@ async function embedTagsInWav(wavArrayBuffer, expTrack) {
   return appendRiffChunk(wavArrayBuffer, chunk);
 }
 
+// ─── ETIQUETAS EN FLAC (VORBIS_COMMENT + PICTURE) ──────────────────────────────
+// FLAC no usa ID3 — usa sus propios "bloques" de metadatos. El de comentarios
+// (VORBIS_COMMENT) va en little-endian, heredado tal cual del formato Ogg Vorbis;
+// el resto de bloques, incluida la carátula (PICTURE), van en big-endian. Es una
+// rareza real del formato, no un despiste.
+function flacMetadataBlockHeader(type, bodyLength, isLast) {
+  const buf = new Uint8Array(4);
+  buf[0] = (isLast ? 0x80 : 0) | (type & 0x7F);
+  buf[1] = (bodyLength >> 16) & 0xFF;
+  buf[2] = (bodyLength >> 8) & 0xFF;
+  buf[3] = bodyLength & 0xFF;
+  return buf;
+}
+
+function buildFlacVorbisCommentBody(pairs) {
+  const vendor = new TextEncoder().encode('VinylBase');
+  const comments = pairs
+    .filter(([, v]) => v != null && String(v) !== '')
+    .map(([k, v]) => new TextEncoder().encode(`${k}=${v}`));
+  let total = 4 + vendor.length + 4;
+  for (const c of comments) total += 4 + c.length;
+  const buf = new Uint8Array(total);
+  const view = new DataView(buf.buffer);
+  let off = 0;
+  view.setUint32(off, vendor.length, true); off += 4; // little-endian (herencia de Ogg Vorbis)
+  buf.set(vendor, off); off += vendor.length;
+  view.setUint32(off, comments.length, true); off += 4;
+  for (const c of comments) {
+    view.setUint32(off, c.length, true); off += 4;
+    buf.set(c, off); off += c.length;
+  }
+  return buf;
+}
+
+function buildFlacPictureBody(mime, pictureBytes) {
+  const pic = pictureBytes instanceof Uint8Array ? pictureBytes : new Uint8Array(pictureBytes);
+  const mimeBytes = new TextEncoder().encode(mime);
+  const total = 4 + 4 + mimeBytes.length + 4 + 4 + 4 + 4 + 4 + 4 + pic.length;
+  const buf = new Uint8Array(total);
+  const view = new DataView(buf.buffer);
+  let off = 0;
+  view.setUint32(off, 3, false); off += 4; // tipo 3: portada frontal
+  view.setUint32(off, mimeBytes.length, false); off += 4;
+  buf.set(mimeBytes, off); off += mimeBytes.length;
+  view.setUint32(off, 0, false); off += 4; // descripción vacía
+  view.setUint32(off, 0, false); off += 4; // ancho desconocido
+  view.setUint32(off, 0, false); off += 4; // alto desconocido
+  view.setUint32(off, 0, false); off += 4; // profundidad de color desconocida
+  view.setUint32(off, 0, false); off += 4; // no es imagen indexada
+  view.setUint32(off, pic.length, false); off += 4;
+  buf.set(pic, off);
+  return buf;
+}
+
+// Recorre un FLAC ya existente, le quita cualquier VORBIS_COMMENT/PICTURE previos y le
+// pone los nuevos con los mismos datos que usa el corte automático — el audio no se toca.
+async function embedTagsInFlac(flacArrayBuffer, expTrack) {
+  const bytes = new Uint8Array(flacArrayBuffer);
+  if (new TextDecoder().decode(bytes.slice(0, 4)) !== 'fLaC') {
+    throw new Error('No es un FLAC válido (falta la cabecera "fLaC")');
+  }
+
+  // Recorrer los bloques de metadatos existentes, conservando todos menos los de
+  // comentarios y carátula (esos los vamos a sustituir por los nuestros).
+  const keptBlocks = [];
+  let pos = 4;
+  let audioStart = null;
+  while (pos + 4 <= bytes.length) {
+    const flagByte = bytes[pos];
+    const isLast = !!(flagByte & 0x80);
+    const type = flagByte & 0x7F;
+    const length = (bytes[pos + 1] << 16) | (bytes[pos + 2] << 8) | bytes[pos + 3];
+    const bodyStart = pos + 4;
+    const bodyEnd = bodyStart + length;
+    if (type !== 4 && type !== 6) {
+      keptBlocks.push({ type, body: bytes.slice(bodyStart, bodyEnd) });
+    }
+    pos = bodyEnd;
+    if (isLast) { audioStart = pos; break; }
+  }
+  if (audioStart == null) throw new Error('FLAC sin bloque final de metadatos — archivo dañado o incompleto');
+
+  const row = expTrack.row;
+  const pairs = [
+    ['TITLE', expTrack.title],
+    ['TRACKNUMBER', expTrack.position],
+    ['ALBUM', expTrack.disc],
+  ];
+  let coverBody = null;
+  if (row) {
+    pairs.push(['ARTIST', g(row, COL.artist)]);
+    if (g(row, COL.year)) pairs.push(['DATE', g(row, COL.year)]);
+    if (g(row, COL.genre)) pairs.push(['GENRE', g(row, COL.genre)]);
+    if (g(row, COL.label)) pairs.push(['LABEL', g(row, COL.label)]);
+    if (g(row, COL.catalog)) {
+      pairs.push(['CATALOGNUMBER', g(row, COL.catalog)]);
+      pairs.push(['COMPOSER', g(row, COL.catalog)]); // mismo criterio que en el WAV, a petición
+    }
+    const releaseId = g(row, COL.release_id);
+    if (releaseId) {
+      const cleanId = releaseId.toString().slice(0, -1);
+      pairs.push(['DISCOGS_RELEASE_ID', cleanId]);
+      await loadCoverForRow(row);
+      const cover = await getCoverBytes(cleanId);
+      if (cover) coverBody = buildFlacPictureBody(cover.mime, cover.bytes);
+    }
+  }
+
+  keptBlocks.push({ type: 4, body: buildFlacVorbisCommentBody(pairs) });
+  if (coverBody) keptBlocks.push({ type: 6, body: coverBody });
+
+  let metaSize = 0;
+  keptBlocks.forEach(b => metaSize += 4 + b.body.length);
+  const out = new Uint8Array(4 + metaSize + (bytes.length - audioStart));
+  out.set(new TextEncoder().encode('fLaC'), 0);
+  let off = 4;
+  keptBlocks.forEach((b, i) => {
+    out.set(flacMetadataBlockHeader(b.type, b.body.length, i === keptBlocks.length - 1), off); off += 4;
+    out.set(b.body, off); off += b.body.length;
+  });
+  out.set(bytes.slice(audioStart), off);
+  return out.buffer;
+}
+
 // Segunda pasada de sentido común: un tema demasiado corto probablemente sea un pasaje
 // flojo mal cortado (se fusiona con el vecino); un tema demasiado largo probablemente
 // se haya "tragado" un hueco real (se vuelve a rastrear ahí dentro con más sensibilidad).
@@ -1236,6 +1368,38 @@ function fmtDuration(sec) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
+// Barra horizontal con la duración total del WAV grabado, marcando en verde los trozos
+// que se han conservado y en rojo los que se han descartado — para cruzarla con Audition
+// y ver de un vistazo dónde puede estar el fallo, si lo hay.
+function buildTimelineHtml(totalDurationSec, segs) {
+  if (!totalDurationSec || !segs || !segs.length) return '';
+  const totalMin = totalDurationSec / 60;
+  const step = totalMin > 40 ? 10 : totalMin > 15 ? 5 : totalMin > 6 ? 2 : 1;
+  let marks = '';
+  for (let m = 0; m <= totalMin + 0.001; m += step) {
+    const pct = Math.min(100, (m * 60 / totalDurationSec * 100)).toFixed(3);
+    marks += `<div style="position:absolute;left:${pct}%;top:0;height:32px;border-left:1px dashed var(--border);pointer-events:none"></div>`;
+    marks += `<div style="position:absolute;left:${pct}%;top:34px;font-size:9px;color:var(--text3);transform:translateX(-2px)">${Math.round(m)}'</div>`;
+  }
+  const bars = segs.map(s => {
+    const left = (s.startSec / totalDurationSec * 100).toFixed(3);
+    const width = Math.max(0.15, (s.endSec - s.startSec) / totalDurationSec * 100).toFixed(3);
+    const color = s.kept ? 'var(--accent)' : 'rgba(220,80,80,.65)';
+    const title = `${fmtDuration(s.startSec)} → ${fmtDuration(s.endSec)}${s.label ? ' — ' + s.label : ''}${s.kept ? '' : ' (descartado)'}`;
+    return `<div title="${title}" style="position:absolute;left:${left}%;width:${width}%;top:2px;bottom:2px;background:${color};border-radius:2px"></div>`;
+  }).join('');
+  return `<div style="margin-top:14px">
+    <div style="display:flex;gap:14px;font-size:10px;color:var(--text3);margin-bottom:6px">
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;vertical-align:middle;margin-right:4px"></span>Conservado</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:rgba(220,80,80,.65);border-radius:2px;vertical-align:middle;margin-right:4px"></span>Descartado</span>
+    </div>
+    <div style="position:relative;height:48px">
+      <div style="position:absolute;left:0;right:0;top:0;height:32px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;overflow:hidden">${bars}</div>
+      ${marks}
+    </div>
+  </div>`;
+}
+
 // Analiza el WAV y devuelve los segmentos ya calculados con los márgenes aplicados,
 // SIN escribir ningún archivo. La usan tanto la vista previa como el guardado real.
 async function analyzeCortadorRaw() {
@@ -1262,6 +1426,7 @@ async function analyzeCortadorRaw() {
   const thresholdDb = isAuto ? computeAdaptiveThresholdDb(envelope, 4) : manualThresholdDb;
   cortadorLogLine(isAuto ? `Umbral automático calculado: ${thresholdDb.toFixed(1)} dB` : `Umbral manual: ${thresholdDb} dB`);
   let segments = detectSegments(envelope, windowMs, thresholdDb, minSilenceSec, totalDurationSec);
+  const rawDetectedSegments = segments.map(s => ({ ...s })); // copia tal cual detectado, antes de fusiones/descartes — para la línea de tiempo
 
   if (!segments.length) {
     cortadorLogLine('⚠ No se detectó ningún tema. Prueba a bajar el umbral de silencio.');
@@ -1319,7 +1484,7 @@ async function analyzeCortadorRaw() {
     }
   }
 
-  return { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec };
+  return { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, rawDetectedSegments, expectedTracksPre, trimStartSec, padEndSec };
 }
 
 function buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec) {
@@ -1346,7 +1511,7 @@ function buildTrackFileName(expTrack, fallbackIndex) {
 async function analyzeCortador() {
   const raw = await analyzeCortadorRaw();
   if (!raw) return null;
-  let { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec } = raw;
+  let { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, rawDetectedSegments, expectedTracksPre, trimStartSec, padEndSec } = raw;
 
   // Si el número de trozos detectados no coincide con el número real de temas de
   // Discogs, reconciliarlo (fusionando y/o descartando) para encajar con las duraciones reales.
@@ -1392,7 +1557,16 @@ async function analyzeCortador() {
     ? expectedTracks
     : null;
 
-  return { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks };
+  // Línea de tiempo: cada trozo tal cual se detectó al principio (antes de fusiones/descartes),
+  // marcado como conservado si cae dentro de alguno de los temas finales, o descartado si no.
+  const timelineSegs = rawDetectedSegments.map(rs => {
+    const fi = finalSegments.findIndex(fs => rs.startSec < fs.endWithPad && rs.endSec > fs.startTrimmed);
+    const kept = fi !== -1;
+    const label = kept && matchedExpectedTracks && matchedExpectedTracks[fi] ? matchedExpectedTracks[fi].title : '';
+    return { startSec: rs.startSec, endSec: rs.endSec, kept, label };
+  });
+
+  return { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks, totalDurationSec, timelineSegs };
 }
 
 async function previewCortador() {
@@ -1401,6 +1575,7 @@ async function previewCortador() {
   if (wantManual) { await startCortadorAssociation(); return; }
   cortadorRunning = true;
   cortadorLog = [];
+  cortadorTimelineData = null;
   renderCortador();
   try {
     const result = await analyzeCortador();
@@ -1410,6 +1585,7 @@ async function previewCortador() {
         cortadorLogLine(`  ${i + 1}. detectado en ${s.detectedAt.toFixed(2)}s → ${fmtDuration(s.startTrimmed)} a ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
       });
       cortadorLogLine('Si te vale, pulsa "Cortar y guardar". Si no, ajusta los parámetros y vuelve a previsualizar.');
+      cortadorTimelineData = { totalDurationSec: result.totalDurationSec, segs: result.timelineSegs };
     }
   } catch(e) {
     console.error(e);
@@ -1525,11 +1701,13 @@ async function runCortador() {
   if (wantManual) { await startCortadorAssociation(); return; }
   cortadorRunning = true;
   cortadorLog = [];
+  cortadorTimelineData = null;
   renderCortador();
   try {
     const result = await analyzeCortador();
     if (!result) { cortadorRunning = false; renderCortador(); return; }
     const { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks } = result;
+    cortadorTimelineData = { totalDurationSec: result.totalDurationSec, segs: result.timelineSegs };
 
     if (matchedExpectedTracks) {
       cortadorLogLine('🏷 Se incrustarán título, artista, álbum, pista, año, género, sello, referencia de catálogo (en catálogo y compositor) y carátula (coincide el número de temas con Discogs).');
@@ -2617,6 +2795,14 @@ function renderBuscador() {
 function renderCortador() {
   if (cortadorAssocActive) { renderCortadorAssocEditor(); return; }
   const main = document.getElementById('main-content');
+
+  // Restaurar posición de scroll de la columna izquierda tras redibujar (no perder el sitio
+  // al tocar un campo, añadir un disco, etc.)
+  const prevLeft = document.getElementById('cortador-scroll');
+  const prevLeftScrollTop = prevLeft ? prevLeft.scrollTop : 0;
+  const prevPanel = document.getElementById('cortador-panel-scroll');
+  const prevPanelScrollTop = prevPanel ? prevPanel.scrollTop : 0;
+
   const discQ = normName(cortadorDiscSearchQ);
   const discResults = discQ
     ? allData.filter(r => (normName(g(r,COL.artist)).includes(discQ) || normName(g(r,COL.title)).includes(discQ) || normName(g(r,COL.catalog)).includes(discQ)) && g(r,COL.release_id)).slice(0, 8)
@@ -2633,7 +2819,8 @@ function renderCortador() {
     <div class="content-header">
       <div style="font-weight:600">✂️ Cortar rip</div>
     </div>
-    <div style="padding:16px;overflow-y:auto;height:calc(100% - 60px);max-width:640px">
+    <div style="display:flex;height:calc(100% - 60px);min-height:0">
+    <div id="cortador-scroll" style="padding:16px;overflow-y:auto;flex:1;max-width:640px">
       <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
         Dale el WAV grande que has grabado de la Denon y una carpeta de salida. Detecto los huecos de silencio entre temas
         y te guardo cada uno como 1.wav, 2.wav, 3.wav... cortado justo donde empieza y 1 segundo después de acabar.
@@ -2699,23 +2886,24 @@ function renderCortador() {
         ${cortadorSessionDiscs.length ? `
         <div class="tracklist" style="margin-bottom:8px">
           ${cortadorSessionDiscs.map((e,i) => {
+            const isWorking = cortadorWorkingDiscIdx === i;
             if (e.manual) {
-              return `<div class="track-row">
+              return `<div class="track-row" style="cursor:pointer;${isWorking ? 'background:var(--bg3)' : ''}" onclick="selectCortadorWorkingDisc(${i})" title="Ver carátula y temas en el panel de la derecha">
                 <span class="track-pos">${i+1}</span>
                 <span class="track-title" style="white-space:normal">${e.title} <span style="color:var(--text3)">(a mano)</span></span>
                 <span style="font-size:10px;color:var(--text3)">${e.trackCount} temas</span>
-                <span class="track-origin missing" style="cursor:pointer" onclick="removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
+                <span class="track-origin missing" style="cursor:pointer" onclick="event.stopPropagation();removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
               </div>`;
             }
             const rid = g(e.row, COL.release_id);
             const tl = tracklistCache[rid.toString().slice(0,-1)];
             const has = !!tl;
-            return `<div class="track-row">
+            return `<div class="track-row" style="cursor:pointer;${isWorking ? 'background:var(--bg3)' : ''}" onclick="selectCortadorWorkingDisc(${i})" title="Ver carátula y temas en el panel de la derecha">
               <span class="track-pos">${i+1}</span>
               <span class="track-title" style="white-space:normal">${g(e.row,COL.artist)} — ${g(e.row,COL.title)}</span>
               <span style="font-size:10px;color:var(--text3)">${has ? tl.length+' temas' : 'cargando...'}</span>
-              ${has ? `<label style="font-size:10px;color:var(--text3);display:flex;align-items:center;gap:3px" title="Corrige el número de temas si sabes que Discogs se queda corto">real: <input type="number" min="1" value="${e.countOverride || tl.length}" onchange="setCortadorCountOverride(${i}, this.value)" style="width:40px;padding:1px 3px"></label>` : ''}
-              <span class="track-origin missing" style="cursor:pointer" onclick="removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
+              ${has ? `<label style="font-size:10px;color:var(--text3);display:flex;align-items:center;gap:3px" title="Corrige el número de temas si sabes que Discogs se queda corto" onclick="event.stopPropagation()">real: <input type="number" min="1" value="${e.countOverride || tl.length}" onchange="setCortadorCountOverride(${i}, this.value)" style="width:40px;padding:1px 3px"></label>` : ''}
+              <span class="track-origin missing" style="cursor:pointer" onclick="event.stopPropagation();removeCortadorSessionDisc(${i})" title="Quitar">✕</span>
             </div>`;
           }).join('')}
         </div>
@@ -2736,11 +2924,77 @@ function renderCortador() {
         ${cortadorRunning ? 'Procesando...' : '✂️ Cortar y guardar'}
       </button>
 
+      ${cortadorTimelineData ? buildTimelineHtml(cortadorTimelineData.totalDurationSec, cortadorTimelineData.segs) : ''}
+
       ${cortadorLog.length ? `
       <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;font-family:monospace;color:var(--text2);max-height:300px;overflow-y:auto">
         ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
       </div>` : ''}
+    </div>
+    ${renderCortadorWorkPanel()}
     </div>`;
+
+  const newLeft = document.getElementById('cortador-scroll');
+  if (newLeft) newLeft.scrollTop = prevLeftScrollTop;
+  const newPanel = document.getElementById('cortador-panel-scroll');
+  if (newPanel) newPanel.scrollTop = prevPanelScrollTop;
+}
+
+// Panel lateral: carátula + nombre + tracklist (A1, A2, B1...) del disco seleccionado en
+// "Discos de esta sesión", para tenerlo de referencia visual y poder arrastrar encima
+// pistas ya cortadas por otro medio (se etiquetan y se guardan con el nombre correcto).
+function renderCortadorWorkPanel() {
+  if (cortadorWorkingDiscIdx == null || !cortadorSessionDiscs[cortadorWorkingDiscIdx]) {
+    return `<div class="detail" style="width:280px">
+      <div class="state-center" style="padding:40px 16px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        <p style="text-align:center;font-size:12px">Elige un disco de la sesión<br>para ver aquí su carátula y sus temas</p>
+      </div>
+    </div>`;
+  }
+  const idx = cortadorWorkingDiscIdx;
+  const entry = cortadorSessionDiscs[idx];
+  const tracks = getTracksForSessionDisc(idx);
+
+  let coverHtml, titleHtml;
+  if (entry.manual) {
+    coverHtml = `<div class="detail-cover-ph">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      <span style="font-size:11px">Disco a mano</span>
+    </div>`;
+    titleHtml = `<div class="d-artist">${entry.title}</div>`;
+  } else {
+    const row = entry.row;
+    const releaseId = g(row, COL.release_id);
+    const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+    const cachedCover = cleanId ? coverCache[cleanId] : undefined;
+    coverHtml = cachedCover
+      ? `<img src="${cachedCover}" style="width:100%;height:100%;object-fit:cover">`
+      : (cachedCover === null
+          ? `<div class="detail-cover-ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg><span style="font-size:11px">Sin carátula</span></div>`
+          : `<div class="detail-cover-ph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6" stroke-dasharray="2 4"/></svg><span style="font-size:11px">Cargando carátula...</span></div>`);
+    titleHtml = `<div class="d-artist">${g(row, COL.artist)}</div><div class="d-title">${g(row, COL.title)}</div>`;
+  }
+
+  return `<div class="detail" style="width:280px">
+    <div class="detail-cover">${coverHtml}</div>
+    <div class="detail-body" id="cortador-panel-scroll" style="overflow-y:auto">
+      ${titleHtml}
+      <div class="d-section">Temas — arrastra aquí una pista ya cortada</div>
+      ${tracks.length === 0
+        ? `<div style="font-size:11px;color:var(--text3)">${entry.manual ? '' : 'Cargando canciones de Discogs...'}</div>`
+        : `<div class="tracklist">
+            ${tracks.map((t, ti) => `
+              <div class="track-row cortador-drop-target" style="flex-direction:column;align-items:flex-start;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;margin-bottom:4px;cursor:default"
+                   ondragover="event.preventDefault();event.currentTarget.classList.add('drop-hover')"
+                   ondragleave="event.currentTarget.classList.remove('drop-hover')"
+                   ondrop="handleCortadorTrackDrop(event, ${idx}, ${ti})">
+                <span class="track-title" style="white-space:normal;font-weight:500">${t.position ? t.position + ' — ' : ''}${t.title}</span>
+                ${t.durationSec != null ? `<span style="font-size:10px;color:var(--text3)">${fmtDuration(t.durationSec)}</span>` : ''}
+              </div>`).join('')}
+          </div>`}
+    </div>
+  </div>`;
 }
 
 function renderCortadorAssocEditor() {
@@ -2750,19 +3004,30 @@ function renderCortadorAssocEditor() {
   const expected = d.expectedTracksPre;
   const assignments = d.assignments;
 
+  const prevScroll = document.getElementById('cortador-assoc-scroll');
+  const prevScrollTop = prevScroll ? prevScroll.scrollTop : 0;
+
   // Qué índices de temas esperados ya tienen algún trozo asignado, para avisar de los que faltan
   const usedExpIdx = new Set(assignments.filter(a => a != null && a >= 0));
   const missingExpected = expected.map((t, i) => i).filter(i => !usedExpIdx.has(i));
+
+  const timelineSegs = segments.map((seg, i) => {
+    const a = assignments[i];
+    const kept = a != null && a >= 0;
+    return { startSec: seg.startSec, endSec: seg.endSec, kept, label: kept && expected[a] ? expected[a].title : '' };
+  });
 
   main.innerHTML = `
     <div class="content-header">
       <div style="font-weight:600">✂️ Cortar rip — asociación manual</div>
     </div>
-    <div style="padding:16px;overflow-y:auto;height:calc(100% - 60px);max-width:720px">
+    <div id="cortador-assoc-scroll" style="padding:16px;overflow-y:auto;height:calc(100% - 60px);max-width:720px">
       <p style="font-size:12px;color:var(--text2);margin-bottom:10px">
         Para cada trozo detectado, di a qué tema de Discogs corresponde (ya viene con una sugerencia puesta).
         Si dos trozos apuntan al mismo tema, se fusionan. Si un trozo no corresponde a ningún tema, dile "Descartar".
       </p>
+
+      ${buildTimelineHtml(d.totalDurationSec, timelineSegs)}
 
       ${missingExpected.length ? `
       <div style="margin-bottom:12px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--warn,#e0a030)">
@@ -2795,6 +3060,9 @@ function renderCortadorAssocEditor() {
         ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
       </div>` : ''}
     </div>`;
+
+  const newScroll = document.getElementById('cortador-assoc-scroll');
+  if (newScroll) newScroll.scrollTop = prevScrollTop;
 }
 
 // ─── DISCOS DE LA SESIÓN (comparar contra duraciones de Discogs) ──────────────
@@ -2820,6 +3088,7 @@ async function addCortadorSessionDisc(idx) {
   if (!releaseId) { showToast('⚠ Este disco no tiene release_id de Discogs', true); return; }
   cortadorSessionDiscs.push({ row });
   cortadorDiscSearchQ = '';
+  cortadorWorkingDiscIdx = cortadorSessionDiscs.length - 1; // lo dejamos seleccionado en el panel lateral
   renderCortador();
   await loadCoverForRow(row); // esto ya trae y cachea el tracklist con duraciones
   renderCortador();
@@ -2827,34 +3096,89 @@ async function addCortadorSessionDisc(idx) {
 
 function removeCortadorSessionDisc(i) {
   cortadorSessionDiscs.splice(i, 1);
+  if (cortadorWorkingDiscIdx === i) cortadorWorkingDiscIdx = null;
+  else if (cortadorWorkingDiscIdx != null && cortadorWorkingDiscIdx > i) cortadorWorkingDiscIdx--;
   renderCortador();
 }
 
+function selectCortadorWorkingDisc(i) {
+  cortadorWorkingDiscIdx = (cortadorWorkingDiscIdx === i) ? null : i;
+  renderCortador();
+}
+
+// El usuario arrastra un WAV o FLAC ya cortado por otro medio (Audition, a mano...)
+// directamente sobre el nombre de un tema del panel lateral: le metemos las mismas
+// etiquetas que pondría el corte automático (título, artista, álbum, pista, año, género,
+// sello, catálogo, Discogs ID y carátula) y lo guardamos con el nombre correcto en la
+// carpeta de salida. El archivo original que arrastraste no se toca — se genera uno nuevo,
+// igual que hace el corte automático, conservando el mismo formato que soltaste.
+async function handleCortadorTrackDrop(event, discIdx, trackIdx) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drop-hover');
+  const file = event.dataTransfer.files && event.dataTransfer.files[0];
+  if (!file) return;
+  const isWav = /\.wav$/i.test(file.name);
+  const isFlac = /\.flac$/i.test(file.name);
+  if (!isWav && !isFlac) {
+    showToast('⚠ Solo se pueden arrastrar archivos .wav o .flac', true);
+    return;
+  }
+  if (!cortadorOutDirHandle) {
+    showToast('⚠ Antes elige la carpeta de salida (paso 2)', true);
+    return;
+  }
+  const tracks = getTracksForSessionDisc(discIdx);
+  const track = tracks[trackIdx];
+  if (!track) return;
+  try {
+    showToast(`Etiquetando "${track.title}"...`);
+    const buf = await file.arrayBuffer();
+    const ext = isFlac ? '.flac' : '.wav';
+    const tagged = isFlac ? await embedTagsInFlac(buf, track) : await embedTagsInWav(buf, track);
+    let baseName = buildTrackFileName(track, trackIdx);
+    const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + ext, { create: true });
+    const writable = await outHandle.createWritable();
+    await writable.write(tagged);
+    await writable.close();
+    showToast(`✓ ${baseName}${ext} guardado con etiquetas`);
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ Error al etiquetar el archivo: ' + e.message, true);
+  }
+}
+
 // Junta las duraciones esperadas de todos los discos de la sesión, en orden
+// Temas esperados de UN solo disco de la sesión (misma lógica que getCortadorExpectedTracks,
+// pero para uno solo — la usan tanto el cálculo global como el panel de trabajo lateral).
+function getTracksForSessionDisc(idx) {
+  const entry = cortadorSessionDiscs[idx];
+  if (!entry) return [];
+  if (entry.manual) {
+    const discName = entry.title;
+    const arr = [];
+    for (let i = 0; i < entry.trackCount; i++) {
+      arr.push({ disc: discName, position: String(i + 1), title: `${discName} — tema ${i + 1}`, durationSec: null, row: null });
+    }
+    return arr;
+  }
+  const releaseId = g(entry.row, COL.release_id);
+  const cleanId = releaseId.toString().slice(0, -1);
+  const tl = tracklistCache[cleanId];
+  if (!tl) return []; // aún no ha llegado de Discogs
+  const discTitle = g(entry.row, COL.title);
+  const discTracks = tl.map(t => ({ disc: discTitle, position: t.position, title: t.title, durationSec: parseDiscogsDuration(t.duration), row: entry.row }));
+  if (entry.countOverride && entry.countOverride > discTracks.length) {
+    for (let i = discTracks.length; i < entry.countOverride; i++) {
+      discTracks.push({ disc: discTitle, position: String(i + 1), title: `${discTitle} — tema ${i + 1} (no está en Discogs)`, durationSec: null, row: entry.row });
+    }
+  }
+  return discTracks;
+}
+
 function getCortadorExpectedTracks() {
   const expected = [];
-  for (const entry of cortadorSessionDiscs) {
-    if (entry.manual) {
-      // Disco añadido a mano: no hay datos de Discogs, solo sabemos cuántos temas hay
-      const discName = entry.title;
-      for (let i = 0; i < entry.trackCount; i++) {
-        expected.push({ disc: discName, position: String(i + 1), title: `${discName} — tema ${i + 1}`, durationSec: null, row: null });
-      }
-      continue;
-    }
-    const releaseId = g(entry.row, COL.release_id);
-    const cleanId = releaseId.toString().slice(0, -1);
-    const tl = tracklistCache[cleanId];
-    if (!tl) continue; // aún no ha llegado de Discogs
-    const discTitle = g(entry.row, COL.title);
-    const discTracks = tl.map(t => ({ disc: discTitle, position: t.position, title: t.title, durationSec: parseDiscogsDuration(t.duration), row: entry.row }));
-    // Si el usuario sabe que hay más temas de los que trae Discogs, rellenar con "duración desconocida"
-    if (entry.countOverride && entry.countOverride > discTracks.length) {
-      for (let i = discTracks.length; i < entry.countOverride; i++) {
-        discTracks.push({ disc: discTitle, position: String(i + 1), title: `${discTitle} — tema ${i + 1} (no está en Discogs)`, durationSec: null, row: entry.row });
-      }
-    }
-    expected.push(...discTracks);
+  for (let i = 0; i < cortadorSessionDiscs.length; i++) {
+    expected.push(...getTracksForSessionDisc(i));
   }
   return expected;
 }
@@ -2865,6 +3189,7 @@ async function addCortadorManualDisc() {
   if (!name) { showToast('⚠ Escribe un nombre para el disco', true); return; }
   if (!count || count < 1) { showToast('⚠ Indica cuántos temas tiene', true); return; }
   cortadorSessionDiscs.push({ manual: true, title: name, trackCount: count });
+  cortadorWorkingDiscIdx = cortadorSessionDiscs.length - 1;
   renderCortador();
 }
 
