@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.72 — Dj Petrik</title>
+<title>VinylBase v2.74 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.72</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.74</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -569,6 +569,11 @@ let cortadorDiscSearchQ = '';
 
 // Línea de tiempo de la última vista previa / corte / asociación, para cruzarla con Audition.
 let cortadorTimelineData = null; // { totalDurationSec, segs: [{startSec, endSec, kept, label}] }
+
+// Reproductor de un trozo detectado suelto, para poder escucharlo mientras se asocia
+// a mano — evita tener que adivinar solo por la duración qué tema es cada uno.
+let cortadorPreviewAudio = null;
+let cortadorPreviewAudioUrl = null;
 
 // Modo de revisión/asociación manual: cuando está activo, se para justo antes de
 // guardar y deja que el usuario diga a mano qué trozo va con qué tema de Discogs.
@@ -1418,6 +1423,34 @@ function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec
   return out;
 }
 
+// Reproduce, tal cual, el trozo de audio que se detectó entre startSec y endSec del WAV
+// grande — sin tocar ni guardar nada. Reutiliza extractWavSegment (la misma función que
+// usa el corte de verdad) para sacar solo esos bytes, y lo pone en un <audio> normal.
+function playCortadorSegment(startSec, endSec) {
+  const d = cortadorAssocData;
+  if (!d) return;
+  try {
+    if (cortadorPreviewAudio) {
+      cortadorPreviewAudio.pause();
+      if (cortadorPreviewAudioUrl) URL.revokeObjectURL(cortadorPreviewAudioUrl);
+    }
+    const segBuf = extractWavSegment(d.buffer, d.fmt, d.dataOffset, d.dataLength, startSec, endSec);
+    const url = URL.createObjectURL(new Blob([segBuf], { type: 'audio/wav' }));
+    cortadorPreviewAudioUrl = url;
+    cortadorPreviewAudio = new Audio(url);
+    cortadorPreviewAudio.play();
+    cortadorPreviewAudio.onended = () => { URL.revokeObjectURL(url); if (cortadorPreviewAudioUrl === url) cortadorPreviewAudioUrl = null; };
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ No se pudo reproducir ese trozo', true);
+  }
+}
+
+function stopCortadorPreview() {
+  if (cortadorPreviewAudio) { cortadorPreviewAudio.pause(); cortadorPreviewAudio = null; }
+  if (cortadorPreviewAudioUrl) { URL.revokeObjectURL(cortadorPreviewAudioUrl); cortadorPreviewAudioUrl = null; }
+}
+
 function fmtDuration(sec) {
   const totalSec = Math.max(0, Math.round(sec));
   const h = Math.floor(totalSec / 3600);
@@ -1682,6 +1715,7 @@ function setCortadorAssignment(idx, value) {
 }
 
 function cancelCortadorAssociation() {
+  stopCortadorPreview();
   cortadorAssocActive = false;
   cortadorAssocData = null;
   renderCortador();
@@ -1689,6 +1723,7 @@ function cancelCortadorAssociation() {
 
 async function confirmCortadorAssociation() {
   if (!cortadorAssocData || !cortadorOutDirHandle || cortadorRunning) return;
+  stopCortadorPreview();
   cortadorRunning = true;
   renderCortador();
   try {
@@ -1745,6 +1780,7 @@ async function confirmCortadorAssociation() {
     showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
     cortadorAssocActive = false;
     cortadorAssocData = null;
+    abrirAyudanteCaratulas();
   } catch(e) {
     console.error(e);
     cortadorLogLine('⚠ Error: ' + e.message);
@@ -1797,6 +1833,7 @@ async function runCortador() {
     }
     cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
     showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
+    abrirAyudanteCaratulas();
   } catch(e) {
     console.error(e);
     cortadorLogLine('⚠ Error: ' + e.message);
@@ -1812,6 +1849,18 @@ function sanitizeFolderName(name) {
     .replace(/\.+$/g, '')           // quitar puntos al final
     .replace(/\s+/g, ' ')           // espacios múltiples
     .trim();
+}
+
+// Abre el ayudante "Poner Carátulas" de tu PC, igual que si pulsaras el botón — se llama
+// sola en cuanto termina de guardar el último archivo de un corte. Si el ayudante tiene
+// carpeta fija configurada, se pone a trabajar y se cierra solo al acabar, sin más clics.
+function abrirAyudanteCaratulas() {
+  const a = document.createElement('a');
+  a.href = 'vinylbase-caratulas:run';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 async function createFolderForRow(idx) {
@@ -3225,6 +3274,8 @@ function renderCortadorAssocEditor() {
 
   const prevScroll = document.getElementById('cortador-assoc-scroll');
   const prevScrollTop = prevScroll ? prevScroll.scrollTop : 0;
+  const prevPanel = document.getElementById('cortador-panel-scroll');
+  const prevPanelScrollTop = prevPanel ? prevPanel.scrollTop : 0;
 
   // Qué índices de temas esperados ya tienen algún trozo asignado, para avisar de los que faltan
   const usedExpIdx = new Set(assignments.filter(a => a != null && a >= 0));
@@ -3240,10 +3291,13 @@ function renderCortadorAssocEditor() {
     <div class="content-header">
       <div style="font-weight:600">✂️ Cortar rip — asociación manual</div>
     </div>
-    <div id="cortador-assoc-scroll" style="padding:16px;overflow-y:auto;height:calc(100% - 60px);max-width:720px">
+    <div style="display:flex;height:calc(100% - 60px);min-height:0">
+    <div id="cortador-assoc-scroll" style="padding:16px;overflow-y:auto;flex:1;max-width:720px">
       <p style="font-size:12px;color:var(--text2);margin-bottom:10px">
-        Para cada trozo detectado, di a qué tema de Discogs corresponde (ya viene con una sugerencia puesta).
-        Si dos trozos apuntan al mismo tema, se fusionan. Si un trozo no corresponde a ningún tema, dile "Descartar".
+        Para cada trozo detectado, dale a ▶ para escucharlo y di a qué tema de Discogs corresponde
+        (ya viene con una sugerencia puesta, y tienes la carátula y la lista de temas a la derecha
+        de referencia). Si dos trozos apuntan al mismo tema, se fusionan. Si un trozo no corresponde
+        a ningún tema, dile "Descartar".
       </p>
 
       ${buildTimelineHtml(d.totalDurationSec, timelineSegs)}
@@ -3257,6 +3311,7 @@ function renderCortadorAssocEditor() {
         ${segments.map((seg, i) => {
           const dur = seg.endSec - seg.startSec;
           return `<div class="track-row" style="align-items:center;flex-wrap:wrap">
+            <button class="btn" style="font-size:12px;padding:4px 9px" onclick="playCortadorSegment(${seg.startSec}, ${seg.endSec})" title="Escuchar este trozo tal cual se detectó">▶</button>
             <span class="track-pos" style="min-width:20px">${i+1}</span>
             <span style="font-size:11px;color:var(--text3);min-width:150px">${fmtDuration(seg.startSec)} a ${fmtDuration(seg.endSec)} (${fmtDuration(dur)})</span>
             <select onchange="setCortadorAssignment(${i}, this.value)" style="flex:1;min-width:180px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text);font-size:12px">
@@ -3278,10 +3333,14 @@ function renderCortadorAssocEditor() {
       <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;font-family:monospace;color:var(--text2);max-height:250px;overflow-y:auto">
         ${cortadorLog.map(l => `<div>${l}</div>`).join('')}
       </div>` : ''}
+    </div>
+    ${renderCortadorWorkPanel()}
     </div>`;
 
   const newScroll = document.getElementById('cortador-assoc-scroll');
   if (newScroll) newScroll.scrollTop = prevScrollTop;
+  const newPanel = document.getElementById('cortador-panel-scroll');
+  if (newPanel) newPanel.scrollTop = prevPanelScrollTop;
 }
 
 // ─── DISCOS DE LA SESIÓN (comparar contra duraciones de Discogs) ──────────────
