@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.70 — Dj Petrik</title>
+<title>VinylBase v2.71 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.70</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.71</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -929,6 +929,65 @@ async function getCoverBytes(cleanId) {
   cortadorLogLine(`⚠ No se pudo conseguir la carátula por ninguna vía (directa, proxy, ni canvas) — el resto de etiquetas se guardan igual.`);
   coverBytesCache[cleanId] = null;
   return null;
+}
+
+// Mismo cascada de intentos que getCoverBytes (directo → proxy → canvas), pero para una
+// URL cualquiera que no viene de Discogs — la usa el arrastre manual de carátula cuando
+// lo que se soltó no trajo el archivo de imagen en sí, solo su dirección web.
+async function tryDownloadArbitraryImageUrl(url) {
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const buf = await res.arrayBuffer();
+      const mime = res.headers.get('content-type') || 'image/jpeg';
+      if (buf.byteLength > 200) return { bytes: buf, mime };
+    }
+  } catch(e) { /* seguimos con la vía proxy */ }
+  const viaProxy = await tryCoverViaProxy(url);
+  if (viaProxy) return { bytes: viaProxy.bytes, mime: viaProxy.mime };
+  const viaCanvas = await tryCoverViaCanvas(url);
+  if (viaCanvas) return { bytes: viaCanvas.bytes, mime: viaCanvas.mime };
+  return null;
+}
+
+// El usuario arrastra la carátula directamente desde la propia página de Discogs (el mismo
+// gesto que ya usa para meterla en Mp3tag) y la suelta sobre el cuadro de la carátula de un
+// disco de la sesión. Al ser un arrastre real del navegador (no una petición nuestra), no
+// choca con el bloqueo CORS de Discogs — el navegador ya tiene la imagen cargada y nos la
+// entrega directamente. Una vez la tenemos, se usa para etiquetar ese disco sin más pasos.
+async function handleCortadorCoverDrop(event, discIdx) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drop-hover');
+  const entry = cortadorSessionDiscs[discIdx];
+  if (!entry || entry.manual) return;
+  const releaseId = g(entry.row, COL.release_id);
+  if (!releaseId) return;
+  const cleanId = releaseId.toString().slice(0, -1);
+
+  let bytes = null, mime = null, displayUrl = null;
+  const file = event.dataTransfer.files && event.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) {
+    bytes = await file.arrayBuffer();
+    mime = file.type;
+    displayUrl = URL.createObjectURL(file);
+  } else {
+    const draggedUrl = event.dataTransfer.getData('text/uri-list') || event.dataTransfer.getData('URL') || event.dataTransfer.getData('text/plain');
+    if (draggedUrl && /^https?:\/\//i.test(draggedUrl)) {
+      showToast('Descargando la carátula arrastrada...');
+      const result = await tryDownloadArbitraryImageUrl(draggedUrl.split('\n')[0].trim());
+      if (result) { bytes = result.bytes; mime = result.mime; displayUrl = draggedUrl.split('\n')[0].trim(); }
+    }
+  }
+
+  if (!bytes) {
+    showToast('⚠ No se pudo leer esa imagen. Prueba a arrastrar la carátula directamente desde la página de Discogs.', true);
+    return;
+  }
+
+  coverBytesCache[cleanId] = { bytes, mime };
+  coverCache[cleanId] = displayUrl;
+  showToast('✓ Carátula puesta a mano — ya se usará para etiquetar este disco');
+  renderCortador();
 }
 
 // Construye el WAV final con etiquetas ID3v2 (título, artista, álbum, pista, año, género, sello) y carátula
@@ -2956,7 +3015,7 @@ function renderCortadorWorkPanel() {
 
   const cards = cortadorSessionDiscs.map((entry, idx) => {
     const tracks = getTracksForSessionDisc(idx);
-    let coverHtml, titleHtml;
+    let coverHtml, titleHtml, coverDropAttrs = '';
     if (entry.manual) {
       coverHtml = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
       titleHtml = `<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${entry.title}</div><div style="font-size:10px;color:var(--text3)">a mano</div>`;
@@ -2966,9 +3025,10 @@ function renderCortadorWorkPanel() {
       const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
       const cachedCover = cleanId ? coverCache[cleanId] : undefined;
       coverHtml = cachedCover
-        ? `<img src="${cachedCover}" style="width:100%;height:100%;object-fit:cover">`
-        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`;
+        ? `<img src="${cachedCover}" style="width:100%;height:100%;object-fit:cover;pointer-events:none">`
+        : `<div style="display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg><span style="font-size:9px;color:var(--text3);text-align:center;padding:0 4px">arrastra aquí la carátula desde Discogs</span></div>`;
       titleHtml = `<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(row, COL.artist)}</div><div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(row, COL.title)}</div>`;
+      coverDropAttrs = `class="cortador-drop-target" ondragover="event.preventDefault();event.currentTarget.classList.add('drop-hover')" ondragleave="event.currentTarget.classList.remove('drop-hover')" ondrop="handleCortadorCoverDrop(event, ${idx})" title="Arrastra aquí la imagen de la carátula desde la web de Discogs (u otra imagen) para usarla en el etiquetado"`;
     }
 
     const tracksHtml = tracks.length === 0
@@ -2985,7 +3045,7 @@ function renderCortadorWorkPanel() {
         </div>`;
 
     return `<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg3);display:flex;flex-direction:column;min-width:0">
-      <div style="width:100%;aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">${coverHtml}</div>
+      <div ${coverDropAttrs} style="width:100%;aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">${coverHtml}</div>
       <div style="padding:8px">
         <div style="font-size:9px;color:var(--text3);margin-bottom:1px">DISCO ${idx + 1}</div>
         ${titleHtml}
