@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.94 — Dj Petrik</title>
+<title>VinylBase v2.95 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.94</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.95</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1264,8 +1264,8 @@ function computeDefaultAssignments(segments, expectedDurations) {
   return assignments;
 }
 
-function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, maxTrackSec, skipShortHandling) {
-  const merged = skipShortHandling ? segments.map(s => ({ ...s })) : mergeShortSegments(segments, minTrackSec);
+function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, maxTrackSec) {
+  const merged = mergeShortSegments(segments, minTrackSec);
 
   const notes = [];
   const result = [];
@@ -1614,11 +1614,12 @@ async function analyzeCortadorRaw() {
     }
   }
 
-  // Si tenemos duraciones reales de Discogs, saltamos la fusión/descarte ciego por
-  // tamaño del todo — es la comparación con Discogs (más abajo) la que decide qué es
-  // basura y qué es una canción corta de verdad (acapellas, etc.), no un tamaño fijo.
-  const skipShortHandling = expectedTracksPre.length > 0;
-  const refined = refineSegmentsByDuration(segments, envelope, windowMs, effectiveMinSec, effectiveMaxSec, skipShortHandling);
+  // La limpieza de trozos cortos (fusionarlos con su vecino) se hace SIEMPRE, tengas o no
+  // discos de la sesión — antes se saltaba con Discogs de por medio, confiando en un paso
+  // posterior más inteligente que ya no existe (se sustituyó por la sugerencia + revisión
+  // manual de más abajo). Sin esta limpieza, esa sugerencia parte de una lista de trozos
+  // mucho más desordenada y sale peor — justo lo que se notaba al añadir discos.
+  const refined = refineSegmentsByDuration(segments, envelope, windowMs, effectiveMinSec, effectiveMaxSec);
   segments = refined.segments;
   if (refined.notes.length) {
     cortadorLogLine(`Ajustando por duración esperada (${(effectiveMinSec/60).toFixed(1)}-${(effectiveMaxSec/60).toFixed(1)} min)...`);
@@ -1753,9 +1754,16 @@ function unlockCortadorValidatedTrack(position) {
   if (!entry) return;
   delete cortadorValidatedTracks[position];
   if (cortadorAssocData) {
+    const newTargetIdx = cortadorAssocData.expectedTracksPre.length;
     cortadorAssocData.expectedTracksPre = [...cortadorAssocData.expectedTracksPre, entry.track];
+    // Devolver también el propio trozo de tiempo (antes solo devolvía el destino al
+    // desplegable, sin la fila para poder elegirlo — por eso "desaparecía"). Se
+    // reinserta ya con el destino que tenía puesto, para que solo haga falta cambiar
+    // el desplegable si el error era el nombre, no volver a marcar el tiempo a mano.
+    cortadorAssocData.segments = [...cortadorAssocData.segments, { startSec: entry.startSec, endSec: entry.endSec }];
+    cortadorAssocData.assignments = [...cortadorAssocData.assignments, newTargetIdx];
   }
-  showToast(`"${entry.track.title}" ya no está validado`);
+  showToast(`"${entry.track.title}" ya no está validado — corrige el tema o el tiempo y vuelve a marcarlo`);
   renderCortador();
 }
 
@@ -3281,6 +3289,8 @@ function renderCortador() {
         El original no se toca.
       </p>
 
+      ${renderValidatedTracksHtml()}
+
       <div class="config-section">
         <h3>1. Archivo WAV grabado</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -3455,6 +3465,24 @@ function renderCortadorWorkPanel() {
   </div>`;
 }
 
+// Se muestra tanto en la pantalla principal como en la de revisión, para que lo ya
+// validado nunca "parezca" borrado — si algo te devuelve a la pantalla principal por
+// cualquier motivo (un error, cancelar...), sigues viéndolo ahí, porque sigue existiendo.
+function renderValidatedTracksHtml() {
+  const validatedList = Object.entries(cortadorValidatedTracks);
+  if (!validatedList.length) return '';
+  return `
+      <div style="margin-bottom:12px">
+        <div class="d-section" style="margin:0 0 6px">✓ Ya validados (${validatedList.length}) — no se han vuelto a analizar</div>
+        <div class="tracklist">
+          ${validatedList.map(([position, e]) => `<div class="track-row">
+            <span class="track-title" style="white-space:normal;flex:1">${position} — ${e.track.title} <span style="color:var(--text3)">(${fmtTimecode(e.startSec)} → ${fmtTimecode(e.endSec)})</span></span>
+            <span class="track-origin missing" style="cursor:pointer" onclick="unlockCortadorValidatedTrack('${position}')" title="Deshacer la validación">✕</span>
+          </div>`).join('')}
+        </div>
+      </div>`;
+}
+
 function renderCortadorAssocEditor() {
   const main = document.getElementById('main-content');
   const d = cortadorAssocData;
@@ -3500,16 +3528,7 @@ function renderCortadorAssocEditor() {
 
       ${buildTimelineHtml(d.totalDurationSec, timelineSegs)}
 
-      ${validatedList.length ? `
-      <div style="margin-bottom:12px">
-        <div class="d-section" style="margin:0 0 6px">✓ Ya validados (${validatedList.length}) — no se han vuelto a analizar</div>
-        <div class="tracklist">
-          ${validatedList.map(([position, e]) => `<div class="track-row">
-            <span class="track-title" style="white-space:normal;flex:1">${position} — ${e.track.title} <span style="color:var(--text3)">(${fmtTimecode(e.startSec)} → ${fmtTimecode(e.endSec)})</span></span>
-            <span class="track-origin missing" style="cursor:pointer" onclick="unlockCortadorValidatedTrack('${position}')" title="Deshacer la validación">✕</span>
-          </div>`).join('')}
-        </div>
-      </div>` : ''}
+      ${renderValidatedTracksHtml()}
 
       ${missingExpected.length ? `
       <div style="margin-bottom:12px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--warn,#e0a030)">
@@ -3608,7 +3627,14 @@ async function addCortadorSessionDisc(idx) {
 
 function removeCortadorSessionDisc(i) {
   cortadorSessionDiscs.splice(i, 1);
-  cortadorValidatedTracks = {}; // la numeración de discos se recoloca — lo validado antes ya no encaja
+  // Solo se borra lo validado de los discos que de verdad cambian de número al quitar
+  // este de en medio (el propio, y los que iban después) — los de antes no se tocan,
+  // porque su numeración sigue siendo exactamente la misma.
+  const discoQuitadoNum = i + 1;
+  for (const position of Object.keys(cortadorValidatedTracks)) {
+    const discNum = parseInt(position.split('-')[0], 10);
+    if (discNum >= discoQuitadoNum) delete cortadorValidatedTracks[position];
+  }
   renderCortador();
 }
 
