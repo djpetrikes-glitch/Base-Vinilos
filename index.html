@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.100 — Dj Petrik</title>
+<title>VinylBase v2.101 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.100</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.101</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3067,8 +3067,11 @@ function renderDetail(row) {
       </a>` : ''}
 
       <div class="d-section">Zona peligrosa</div>
+      <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px" onclick="quitarDiscoSoloDeApp(${allData.indexOf(row)})" title="Lo quita de lo que ves aquí, pero NO toca el Google Sheet — reaparecerá si recargas">
+        🗑 Quitar solo de esta app (no toca el Sheet)
+      </button>
       <button class="btn" style="width:100%;justify-content:center;color:#c0392b;border-color:#c0392b" onclick="borrarDiscoDesdeFicha(${allData.indexOf(row)})">
-        🗑 Borrar este disco del Sheet
+        🗑 Borrar también del Sheet
       </button>
     </div>
     ${isV ? `<div class="detail-actions">
@@ -3439,10 +3442,10 @@ function renderCortador() {
         </div>` : ''}
         <details style="margin-bottom:10px">
           <summary style="font-size:12px;color:var(--text3);cursor:pointer">¿No lo encuentras o no tiene Discogs? Añádelo a mano</summary>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
-            <input id="cortador-manual-name" placeholder="Nombre del disco (artista - título)" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px">
-            <input id="cortador-manual-count" type="number" min="1" placeholder="nº temas" style="width:70px">
-            <button class="btn" onclick="addCortadorManualDisc()">Añadir</button>
+          <div style="margin-top:8px">
+            <input id="cortador-manual-name" placeholder="Nombre del disco (artista - título)" style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px">
+            <textarea id="cortador-manual-tracks" placeholder="Un tema por línea, en el orden real del disco (A1, A2, B1, B2...) — así el análisis ya sabe qué cortes esperar" rows="4" style="width:100%;box-sizing:border-box;margin-top:6px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px;font-family:inherit;resize:vertical"></textarea>
+            <button class="btn" onclick="addCortadorManualDisc()" style="margin-top:6px">Añadir</button>
           </div>
         </details>
         ${cortadorSessionDiscs.length ? `
@@ -3791,7 +3794,8 @@ function getTracksForSessionDisc(idx) {
     const discName = entry.title;
     const arr = [];
     for (let i = 0; i < entry.trackCount; i++) {
-      arr.push({ disc: discName, position: `${discNum}-${i + 1}`, title: `${discName} — tema ${i + 1}`, durationSec: null, row: null });
+      const titulo = (entry.trackTitles && entry.trackTitles[i]) ? entry.trackTitles[i] : `${discName} — tema ${i + 1}`;
+      arr.push({ disc: discName, position: `${discNum}-${i + 1}`, title: titulo, durationSec: null, row: null });
     }
     return arr;
   }
@@ -3819,10 +3823,11 @@ function getCortadorExpectedTracks() {
 
 async function addCortadorManualDisc() {
   const name = (document.getElementById('cortador-manual-name')?.value || '').trim();
-  const count = parseInt(document.getElementById('cortador-manual-count')?.value || '0', 10);
+  const tracksRaw = document.getElementById('cortador-manual-tracks')?.value || '';
+  const trackTitles = tracksRaw.split('\n').map(s => s.trim()).filter(Boolean);
   if (!name) { showToast('⚠ Escribe un nombre para el disco', true); return; }
-  if (!count || count < 1) { showToast('⚠ Indica cuántos temas tiene', true); return; }
-  cortadorSessionDiscs.push({ manual: true, title: name, trackCount: count });
+  if (!trackTitles.length) { showToast('⚠ Escribe al menos un tema, uno por línea', true); return; }
+  cortadorSessionDiscs.push({ manual: true, title: name, trackCount: trackTitles.length, trackTitles });
   renderCortador();
 }
 
@@ -4039,6 +4044,21 @@ async function deleteFromSheet(row) {
       action: 'delete',
     }),
   });
+}
+
+// Quita el disco de lo que ves en la app AHORA MISMO, sin tocar el Sheet para nada —
+// ni siquiera necesita release_id, porque no depende de identificarlo ahí. Si recargas
+// la página, vuelve a aparecer (porque sigue en el Sheet tal cual estaba).
+function quitarDiscoSoloDeApp(idx) {
+  const row = allData[idx];
+  if (!row) return;
+  const nombre = `${g(row, COL.artist)} — ${g(row, COL.title)}`;
+  if (!confirm(`¿Quitar "${nombre}" de lo que ves en la app?\n\nOJO: esto NO lo borra del Google Sheet — solo desaparece aquí hasta que recargues.`)) return;
+  allData.splice(idx, 1);
+  selectedRow = null;
+  renderStats();
+  renderView();
+  showToast('✓ Quitado de esta vista (sigue en el Sheet)');
 }
 
 async function borrarDiscoDesdeFicha(idx) {
