@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.89 — Dj Petrik</title>
+<title>VinylBase v2.92 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.89</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.92</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -581,6 +581,12 @@ let cortadorPreviewAudioUrl = null;
 let cortadorAssocActive = false;
 let cortadorAssocData = null; // { file, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments }
 
+// Temas que ya has dado por buenos con el ✓ de validar: se guardan aquí, con sus límites
+// tal cual estaban en el momento de validarlos. Sobreviven a un nuevo análisis (cambiar el
+// umbral y volver a "Analizar y revisar cortes" no los toca) — solo se borran si cambias
+// de archivo o tocas los discos de la sesión. Clave: la posición del tema (ej. "1-3").
+let cortadorValidatedTracks = {};
+
 // Ajustes del cortador — se recuerdan de una vez a otra (localStorage), no solo dentro
 // de esta sesión, para que tocar "Cortar" nunca los borre ni haga falta repetirlos.
 const CORTADOR_SETTINGS_KEY = 'vinylbase_cortador_settings';
@@ -627,6 +633,7 @@ async function pickCortadorFile() {
       multiple: false,
     });
     cortadorFileHandle = handle;
+    cortadorValidatedTracks = {}; // archivo nuevo: lo validado antes ya no aplica
     renderCortador();
   } catch(e) { /* selección cancelada */ }
 }
@@ -1678,12 +1685,17 @@ async function startCortadorAssociation() {
   try {
     const raw = await analyzeCortadorRaw();
     if (!raw) { cortadorRunning = false; renderCortador(); return; }
-    const expectedTracksPre = ensureAssignableTargets(raw.expectedTracksPre, raw.segments.length);
+    const allTargets = ensureAssignableTargets(raw.expectedTracksPre, raw.segments.length);
+    // Los ya validados no entran en el reparto de este análisis — se guardan aparte tal
+    // cual estaban, y no se ofrecen como destino para los trozos recién detectados.
+    const expectedTracksPre = allTargets.filter(t => !cortadorValidatedTracks[t.position]);
     const expectedDurations = expectedTracksPre.map(t => t.durationSec);
     const assignments = computeDefaultAssignments(raw.segments, expectedDurations);
     cortadorAssocData = { ...raw, expectedTracksPre, assignments };
     cortadorAssocActive = true;
-    cortadorLogLine('Sugerencia de asociación calculada. Revísala abajo: escucha cada trozo, corrige lo que haga falta, y fusiona los que en realidad sean el mismo tema asignándolos al mismo destino.');
+    const nValidados = allTargets.length - expectedTracksPre.length;
+    cortadorLogLine('Sugerencia de asociación calculada. Revísala abajo: escucha cada trozo, corrige lo que haga falta, y fusiona los que en realidad sean el mismo tema asignándolos al mismo destino.'
+      + (nValidados ? ` (${nValidados} tema(s) ya validado(s) antes se han dejado tal cual, sin volver a analizarlos.)` : ''));
   } catch(e) {
     console.error(e);
     cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
@@ -1695,6 +1707,55 @@ async function startCortadorAssociation() {
 function setCortadorAssignment(idx, value) {
   if (!cortadorAssocData) return;
   cortadorAssocData.assignments[idx] = parseInt(value, 10);
+  renderCortador();
+}
+
+// Da por bueno el tema al que apunta este trozo (y cualquier otro fusionado con él) tal
+// como está AHORA MISMO: guarda sus límites aparte, y lo saca de la lista de trabajo para
+// que un futuro reanálisis (cambiar el umbral y volver a analizar) no lo vuelva a tocar.
+function validateCortadorTrack(segIdx) {
+  const d = cortadorAssocData;
+  if (!d) return;
+  const targetIdx = d.assignments[segIdx];
+  if (targetIdx == null || targetIdx < 0) {
+    showToast('⚠ Este trozo está en "Descartar" — antes elige a qué tema pertenece', true);
+    return;
+  }
+  const target = d.expectedTracksPre[targetIdx];
+  if (!target) return;
+
+  const groupSegs = d.segments.filter((s, i) => d.assignments[i] === targetIdx);
+  const startSec = Math.min(...groupSegs.map(s => s.startSec));
+  const endSec = Math.max(...groupSegs.map(s => s.endSec));
+  cortadorValidatedTracks[target.position] = { track: target, startSec, endSec };
+
+  // Sacar del análisis en curso los trozos de este grupo y el propio destino, renumerando
+  // las asignaciones que queden para que sigan apuntando al índice correcto.
+  const keptIdx = [];
+  d.segments.forEach((s, i) => { if (d.assignments[i] !== targetIdx) keptIdx.push(i); });
+  const newAssignForKept = keptIdx.map(i => {
+    const a = d.assignments[i];
+    if (a == null || a < 0) return a;
+    return a > targetIdx ? a - 1 : a;
+  });
+  d.segments = keptIdx.map(i => d.segments[i]);
+  d.assignments = newAssignForKept;
+  d.expectedTracksPre = d.expectedTracksPre.filter((t, j) => j !== targetIdx);
+
+  showToast(`✓ "${target.title}" validado — no se volverá a analizar`);
+  renderCortador();
+}
+
+// Deshace la validación — el tema vuelve a poder asignarse a mano entre los trozos que
+// haya ahora mismo en pantalla (no recupera los trozos originales de cuando se validó).
+function unlockCortadorValidatedTrack(position) {
+  const entry = cortadorValidatedTracks[position];
+  if (!entry) return;
+  delete cortadorValidatedTracks[position];
+  if (cortadorAssocData) {
+    cortadorAssocData.expectedTracksPre = [...cortadorAssocData.expectedTracksPre, entry.track];
+  }
+  showToast(`"${entry.track.title}" ya no está validado`);
   renderCortador();
 }
 
@@ -1740,25 +1801,31 @@ async function confirmCortadorAssociation() {
     });
 
     const orderedExpIdx = Object.keys(groups).map(Number).sort((a, b) => a - b);
-    if (!orderedExpIdx.length) {
+    const mergedFromCurrent = orderedExpIdx.map(expIdx => {
+      const group = groups[expIdx].slice().sort((a, b) => a.startSec - b.startSec);
+      return { startSec: group[0].startSec, endSec: group[group.length - 1].endSec };
+    });
+    const matchedFromCurrent = orderedExpIdx.map(expIdx => expectedTracksPre[expIdx]);
+
+    // Sumar los que ya estaban validados de antes (con sus límites guardados tal cual)
+    const validatedEntries = Object.values(cortadorValidatedTracks);
+    const mergedSegments = [...validatedEntries.map(e => ({ startSec: e.startSec, endSec: e.endSec })), ...mergedFromCurrent];
+    const matchedTracksInOrder = [...validatedEntries.map(e => e.track), ...matchedFromCurrent];
+
+    if (!mergedSegments.length) {
       cortadorLogLine('⚠ No has asociado ningún trozo a ningún tema — no hay nada que guardar.');
       cortadorRunning = false;
       renderCortador();
       return;
     }
-    const mergedSegments = orderedExpIdx.map(expIdx => {
-      const group = groups[expIdx].slice().sort((a, b) => a.startSec - b.startSec);
-      return { startSec: group[0].startSec, endSec: group[group.length - 1].endSec };
-    });
-    const matchedTracksInOrder = orderedExpIdx.map(expIdx => expectedTracksPre[expIdx]);
-
-    if (orderedExpIdx.length < expectedTracksPre.length) {
-      cortadorLogLine(`⚠ Quedan ${expectedTracksPre.length - orderedExpIdx.length} tema(s) de Discogs sin ningún trozo asignado — no se guardarán esos.`);
+    const totalTargets = expectedTracksPre.length + validatedEntries.length;
+    if (mergedSegments.length < totalTargets) {
+      cortadorLogLine(`⚠ Quedan ${totalTargets - mergedSegments.length} tema(s) sin ningún trozo asignado — no se guardarán esos.`);
     }
 
     const finalSegments = buildFinalSegments(mergedSegments, totalDurationSec, trimStartSec, padEndSec);
 
-    cortadorLogLine(`Guardando ${finalSegments.length} temas según tu asociación...`);
+    cortadorLogLine(`Guardando ${finalSegments.length} temas según tu asociación${validatedEntries.length ? ` (${validatedEntries.length} ya estaban validados de antes)` : ''}...`);
     const usedNames = new Set();
     for (let i = 0; i < finalSegments.length; i++) {
       const s = finalSegments[i];
@@ -1781,6 +1848,7 @@ async function confirmCortadorAssociation() {
     showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
     cortadorAssocActive = false;
     cortadorAssocData = null;
+    cortadorValidatedTracks = {};
     abrirAyudanteCaratulas();
   } catch(e) {
     console.error(e);
@@ -3268,8 +3336,9 @@ function renderCortador() {
       <button class="btn btn-accent" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px"
         ${(!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) ? 'disabled' : ''}
         onclick="startCortadorAssociation()">
-        ${cortadorRunning ? 'Analizando...' : '👁 Revisar cortes y guardar'}
+        ${cortadorRunning ? 'Analizando...' : '👁 Analizar y revisar cortes'}
       </button>
+      <p style="font-size:11px;color:var(--text3);margin-top:-4px">Esto NO guarda nada todavía — solo analiza el WAV y te lleva a revisarlo. El guardado real está en el siguiente botón, dentro de esa pantalla.</p>
 
       <a href="vinylbase-caratulas:run" class="btn" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px;text-decoration:none;box-sizing:border-box" title="Abre el programa 'Poner Carátulas' de tu PC (tiene que estar instalado y registrado una vez — ver el botón de ayuda)">
         🎨 Poner carátulas (abre el ayudante de tu PC)
@@ -3370,11 +3439,16 @@ function renderCortadorAssocEditor() {
   const usedExpIdx = new Set(assignments.filter(a => a != null && a >= 0));
   const missingExpected = expected.map((t, i) => i).filter(i => !usedExpIdx.has(i));
 
-  const timelineSegs = segments.map((seg, i) => {
-    const a = assignments[i];
-    const kept = a != null && a >= 0;
-    return { startSec: seg.startSec, endSec: seg.endSec, kept, label: kept && expected[a] ? expected[a].title : '' };
-  });
+  const validatedList = Object.entries(cortadorValidatedTracks); // [ [position, {track, startSec, endSec}], ... ]
+
+  const timelineSegs = [
+    ...segments.map((seg, i) => {
+      const a = assignments[i];
+      const kept = a != null && a >= 0;
+      return { startSec: seg.startSec, endSec: seg.endSec, kept, label: kept && expected[a] ? expected[a].title : '' };
+    }),
+    ...validatedList.map(([, e]) => ({ startSec: e.startSec, endSec: e.endSec, kept: true, label: e.track.title })),
+  ];
 
   main.innerHTML = `
     <div class="content-header">
@@ -3383,15 +3457,27 @@ function renderCortadorAssocEditor() {
     <div style="display:flex;height:calc(100% - 60px);min-height:0">
     <div id="cortador-assoc-scroll" style="padding:16px;overflow-y:auto;flex:1;max-width:720px">
       <p style="font-size:12px;color:var(--text2);margin-bottom:10px">
-        Para cada trozo detectado, dale a ▶ para escucharlo y di a qué tema de Discogs corresponde
+        Para cada trozo detectado, dale a ▶ para escucharlo y di a qué tema corresponde
         (ya viene con una sugerencia puesta, y tienes la carátula y la lista de temas a la derecha
         de referencia). Los dos números de tiempo son editables — si el corte se ha pasado o se ha
         quedado corto, cámbialos a mano y vuelve a darle a ▶ para comprobarlo; eso es exactamente lo
         que se guardará. Si dos trozos apuntan al mismo tema, se fusionan. Si un trozo no corresponde
-        a ningún tema, dile "Descartar".
+        a ningún tema, dile "Descartar". Cuando un tema esté bien, dale a ✓ para darlo por bueno —
+        así, si vuelves a analizar (por ejemplo tras cambiar el umbral), no se toca.
       </p>
 
       ${buildTimelineHtml(d.totalDurationSec, timelineSegs)}
+
+      ${validatedList.length ? `
+      <div style="margin-bottom:12px">
+        <div class="d-section" style="margin:0 0 6px">✓ Ya validados (${validatedList.length}) — no se han vuelto a analizar</div>
+        <div class="tracklist">
+          ${validatedList.map(([position, e]) => `<div class="track-row">
+            <span class="track-title" style="white-space:normal;flex:1">${position} — ${e.track.title} <span style="color:var(--text3)">(${fmtTimecode(e.startSec)} → ${fmtTimecode(e.endSec)})</span></span>
+            <span class="track-origin missing" style="cursor:pointer" onclick="unlockCortadorValidatedTrack('${position}')" title="Deshacer la validación">✕</span>
+          </div>`).join('')}
+        </div>
+      </div>` : ''}
 
       ${missingExpected.length ? `
       <div style="margin-bottom:12px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--warn,#e0a030)">
@@ -3414,6 +3500,7 @@ function renderCortadorAssocEditor() {
               <option value="-1" ${assignments[i] === -1 ? 'selected' : ''}>— Descartar (ruido) —</option>
               ${expected.map((t, ei) => `<option value="${ei}" ${assignments[i] === ei ? 'selected' : ''}>${t.position ? t.position + ' — ' : ''}${t.title}${t.durationSec != null ? ' (' + fmtDuration(t.durationSec) + ')' : ''}</option>`).join('')}
             </select>
+            <button class="btn" style="font-size:12px;padding:4px 9px;${assignments[i] != null && assignments[i] >= 0 ? '' : 'opacity:.4;cursor:default'}" ${assignments[i] != null && assignments[i] >= 0 ? '' : 'disabled'} onclick="validateCortadorTrack(${i})" title="Dar este tema por bueno — no se tocará en un futuro reanálisis">✓</button>
           </div>`;
         }).join('')}
       </div>
@@ -3471,6 +3558,7 @@ async function addCortadorSessionDisc(idx) {
 
 function removeCortadorSessionDisc(i) {
   cortadorSessionDiscs.splice(i, 1);
+  cortadorValidatedTracks = {}; // la numeración de discos se recoloca — lo validado antes ya no encaja
   renderCortador();
 }
 
@@ -3518,14 +3606,18 @@ async function handleCortadorTrackDrop(event, discIdx, trackIdx) {
 // Junta las duraciones esperadas de todos los discos de la sesión, en orden
 // Temas esperados de UN solo disco de la sesión (misma lógica que getCortadorExpectedTracks,
 // pero para uno solo — la usan tanto el cálculo global como el panel de trabajo lateral).
+// Numeración propia en vez de la de Discogs (A1, A2, B1...) que confundía: "nº de disco
+// de la sesión - nº de tema secuencial", sin distinguir cara — el disco 1 con 5 temas
+// (2 en la cara A, 3 en la B) queda 1-1, 1-2, 1-3, 1-4, 1-5; el disco 2 empieza en 2-1, etc.
 function getTracksForSessionDisc(idx) {
   const entry = cortadorSessionDiscs[idx];
   if (!entry) return [];
+  const discNum = idx + 1;
   if (entry.manual) {
     const discName = entry.title;
     const arr = [];
     for (let i = 0; i < entry.trackCount; i++) {
-      arr.push({ disc: discName, position: String(i + 1), title: `${discName} — tema ${i + 1}`, durationSec: null, row: null });
+      arr.push({ disc: discName, position: `${discNum}-${i + 1}`, title: `${discName} — tema ${i + 1}`, durationSec: null, row: null });
     }
     return arr;
   }
@@ -3534,10 +3626,10 @@ function getTracksForSessionDisc(idx) {
   const tl = tracklistCache[cleanId];
   if (!tl) return []; // aún no ha llegado de Discogs
   const discTitle = g(entry.row, COL.title);
-  const discTracks = tl.map(t => ({ disc: discTitle, position: t.position, title: t.title, durationSec: parseDiscogsDuration(t.duration), row: entry.row }));
+  const discTracks = tl.map((t, i) => ({ disc: discTitle, position: `${discNum}-${i + 1}`, title: t.title, durationSec: parseDiscogsDuration(t.duration), row: entry.row }));
   if (entry.countOverride && entry.countOverride > discTracks.length) {
     for (let i = discTracks.length; i < entry.countOverride; i++) {
-      discTracks.push({ disc: discTitle, position: String(i + 1), title: `${discTitle} — tema ${i + 1} (no está en Discogs)`, durationSec: null, row: entry.row });
+      discTracks.push({ disc: discTitle, position: `${discNum}-${i + 1}`, title: `${discTitle} — tema ${i + 1} (no está en Discogs)`, durationSec: null, row: entry.row });
     }
   }
   return discTracks;
