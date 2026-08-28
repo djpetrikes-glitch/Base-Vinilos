@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.88 — Dj Petrik</title>
+<title>VinylBase v2.89 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.88</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.89</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -571,15 +571,6 @@ let cortadorLog = [];
 let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
 let cortadorDiscSearchQ = '';
 
-// Línea de tiempo de la última vista previa / corte / asociación, para cruzarla con Audition.
-let cortadorTimelineData = null; // { totalDurationSec, segs: [{startSec, endSec, kept, label}] }
-
-// Resultado de la última "Vista previa" normal (no manual): igual que cortadorAssocData,
-// pero con los cortes ya casados con los temas de Discogs. Se puede editar el tiempo de
-// cada uno aquí mismo, y "Cortar y guardar" usa esto directamente si existe, en vez de
-// volver a analizar desde cero — así no se pierden los ajustes a mano que hayas hecho.
-let cortadorPreviewData = null; // { file, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks, totalDurationSec, timelineSegs }
-
 // Reproductor de un trozo detectado suelto, para poder escucharlo mientras se asocia
 // a mano — evita tener que adivinar solo por la duración qué tema es cada uno.
 let cortadorPreviewAudio = null;
@@ -601,7 +592,6 @@ let cortadorSettings = {
   maxTrackMin: 8,
   trimStartSec: 0.3,
   padEndSec: 1,
-  manualAssoc: false,
 };
 try {
   const savedCortador = JSON.parse(localStorage.getItem(CORTADOR_SETTINGS_KEY) || 'null');
@@ -621,7 +611,6 @@ function readCortadorFormIntoSettings() {
     maxTrackMin: parseFloat(document.getElementById('cortador-maxtrack')?.value || cortadorSettings.maxTrackMin),
     trimStartSec: parseFloat(document.getElementById('cortador-trimstart')?.value || cortadorSettings.trimStartSec),
     padEndSec: parseFloat(document.getElementById('cortador-padend')?.value || cortadorSettings.padEndSec),
-    manualAssoc: !!document.getElementById('cortador-manualassoc')?.checked,
   };
   saveCortadorSettings();
 }
@@ -638,8 +627,6 @@ async function pickCortadorFile() {
       multiple: false,
     });
     cortadorFileHandle = handle;
-    cortadorPreviewData = null; // archivo nuevo: la vista previa anterior ya no vale
-    cortadorTimelineData = null;
     renderCortador();
   } catch(e) { /* selección cancelada */ }
 }
@@ -1226,84 +1213,10 @@ async function embedTagsInFlac(flacArrayBuffer, expTrack) {
   return out.buffer;
 }
 
-// Segunda pasada de sentido común: un tema demasiado corto probablemente sea un pasaje
-// flojo mal cortado (se fusiona con el vecino); un tema demasiado largo probablemente
-// se haya "tragado" un hueco real (se vuelve a rastrear ahí dentro con más sensibilidad).
-// Cuando sabemos el número exacto de temas y sus duraciones (Discogs), y detectamos
-// MÁS trozos de los esperados, busca qué fusión de dos trozos vecinos hace que las
-// duraciones resultantes se parezcan más a las reales — no solo "es corto, fusiona".
-// Encuentra, de golpe, la mejor forma de convertir N trozos detectados en los M temas
-// que dice Discogs — combinando fusiones (varios trozos seguidos = una canción mal
-// cortada) y descartes (un trozo que no encaja en ningún lado = ruido/basura) — en vez
-// de ir decidiendo de uno en uno, para no tomar una mala decisión a mitad de camino.
-function reconcileSegmentCount(segments, expectedDurations, logFn) {
-  const N = segments.length;
-  const M = expectedDurations.length;
-  if (N <= M) return segments.map(s => ({ ...s }));
-
-  const INF = Infinity;
-  // dp[i][j] = menor "distancia" total usando los primeros i trozos para cubrir los primeros j temas esperados
-  const dp = Array.from({ length: N + 1 }, () => new Array(M + 1).fill(INF));
-  const choice = Array.from({ length: N + 1 }, () => new Array(M + 1).fill(null));
-  dp[0][0] = 0;
-
-  for (let i = 1; i <= N; i++) {
-    for (let j = 0; j <= M; j++) {
-      // Opción 1: el trozo i (0-indexado i-1) es basura, se descarta, no cuenta para ningún tema
-      if (dp[i - 1][j] < dp[i][j]) {
-        dp[i][j] = dp[i - 1][j];
-        choice[i][j] = { type: 'delete' };
-      }
-      // Opción 2: los trozos desde k hasta i-1 (0-indexados), fusionados si hace falta,
-      // forman juntos el tema esperado número j-1
-      if (j >= 1) {
-        let sumDur = 0;
-        for (let k = i - 1; k >= 0; k--) {
-          sumDur += (segments[k].endSec - segments[k].startSec);
-          const expDur = expectedDurations[j - 1];
-          const durCost = expDur == null ? 0 : Math.abs(sumDur - expDur); // sin dato de Discogs, no penaliza
-          const cost = dp[k][j - 1] + durCost;
-          if (cost < dp[i][j]) {
-            dp[i][j] = cost;
-            choice[i][j] = { type: 'assign', from: k };
-          }
-        }
-      }
-    }
-  }
-
-  // Reconstruir la solución óptima hacia atrás
-  const result = [];
-  const deletedIdx = [];
-  const mergedGroups = [];
-  let i = N, j = M;
-  while (i > 0) {
-    const c = choice[i][j];
-    if (!c) break; // no debería pasar, pero por seguridad
-    if (c.type === 'delete') {
-      deletedIdx.push(i - 1);
-      i -= 1;
-    } else {
-      const k = c.from;
-      const group = segments.slice(k, i);
-      result.push({ startSec: group[0].startSec, endSec: group[group.length - 1].endSec });
-      if (group.length > 1) mergedGroups.push(group.length);
-      i = k;
-      j -= 1;
-    }
-  }
-  result.reverse();
-
-  if (logFn) {
-    if (deletedIdx.length) logFn(`Descartados ${deletedIdx.length} trozo(s) que no encajaban con ninguna duración de Discogs (ruido/basura).`);
-    if (mergedGroups.length) logFn(`Fusionados ${mergedGroups.length} grupo(s) de trozos vecinos para encajar con las duraciones reales.`);
-  }
-  return result;
-}
-
-// Igual que reconcileSegmentCount, pero en vez de devolver los trozos ya fusionados,
-// devuelve para CADA trozo en bruto a qué tema esperado (índice) está asignado, o -1 si
-// se sugiere descartarlo — para poder mostrarlo editable en el modo de revisión manual.
+// Sugiere, para CADA trozo en bruto, a qué tema esperado (índice) está asignado, o -1 si
+// se sugiere descartarlo — es solo la sugerencia inicial del desplegable de revisión;
+// tú puedes cambiar cualquier asignación a mano (y así fusionar dos trozos en el mismo
+// tema si el detector partió una canción en dos por error).
 function computeDefaultAssignments(segments, expectedDurations) {
   const N = segments.length, M = expectedDurations.length;
   if (N === 0) return [];
@@ -1520,20 +1433,6 @@ function playCortadorSegment(startSec, endSec) {
   const d = cortadorAssocData;
   if (!d) return;
   playWavRange(d.file, d.fmt, d.dataOffset, d.dataLength, startSec, endSec).catch(e => {
-    console.error(e);
-    showToast('⚠ No se pudo reproducir ese trozo', true);
-  });
-}
-
-// Igual que playCortadorSegment, pero para un tema de la vista previa normal (ya casado
-// con Discogs) — lee siempre el tiempo ACTUAL del trozo, así que si lo acabas de editar a
-// mano, escucha exactamente lo que has escrito, no lo que se detectó al principio.
-function playCortadorPreviewSegment(i) {
-  const d = cortadorPreviewData;
-  if (!d) return;
-  const s = d.finalSegments[i];
-  if (!s) return;
-  playWavRange(d.file, d.fmt, d.dataOffset, d.dataLength, s.startTrimmed, s.endWithPad).catch(e => {
     console.error(e);
     showToast('⚠ No se pudo reproducir ese trozo', true);
   });
@@ -1761,105 +1660,30 @@ function buildTrackFileName(expTrack, fallbackIndex) {
   return String(fallbackIndex + 1);
 }
 
-async function analyzeCortador() {
-  const raw = await analyzeCortadorRaw();
-  if (!raw) return null;
-  let { file, fmt, dataOffset, dataLength, totalDurationSec, segments, rawDetectedSegments, expectedTracksPre, trimStartSec, padEndSec } = raw;
-
-  // Si el número de trozos detectados no coincide con el número real de temas de
-  // Discogs, reconciliarlo (fusionando y/o descartando) para encajar con las duraciones reales.
-  if (expectedTracksPre.length && segments.length !== expectedTracksPre.length) {
-    const expectedDurations = expectedTracksPre.map(t => t.durationSec); // puede tener null
-    cortadorLogLine(`Ajustando ${segments.length} trozos a los ${expectedDurations.length} temas de Discogs...`);
-    segments = reconcileSegmentCount(segments, expectedDurations, cortadorLogLine);
-  }
-
-  // Aplicar los márgenes de inicio/final a cada segmento, calculando ya el resultado final
-  const finalSegments = buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec);
-
-  // Si hay discos de la sesión añadidos, comparar contra lo que dice Discogs
-  const expectedTracks = getCortadorExpectedTracks();
-  if (expectedTracks.length) {
-    const expectedTotalSec = expectedTracks.reduce((a, t) => a + (t.durationSec || 0), 0);
-    const detectedTotalSec = finalSegments.reduce((a, s) => a + (s.endWithPad - s.startTrimmed), 0);
-    cortadorLogLine('');
-    cortadorLogLine(`📀 Discogs esperaba: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total (de los que tienen duración en Discogs).`);
-    cortadorLogLine(`   Se han detectado: ${finalSegments.length} temas, ${fmtDuration(detectedTotalSec)} en total.`);
-    if (finalSegments.length !== expectedTracks.length) {
-      cortadorLogLine(`⚠ El número de temas no coincide — puede que sobre o falte algún corte.`);
-    } else {
-      cortadorLogLine('Comparación tema a tema:');
-      finalSegments.forEach((s, i) => {
-        const exp = expectedTracks[i];
-        const detDur = s.endWithPad - s.startTrimmed;
-        if (exp.durationSec == null) {
-          cortadorLogLine(`  ${i+1}. "${exp.title}" — Discogs no tiene la duración, detectado ${fmtDuration(detDur)}`);
-        } else {
-          const diff = detDur - exp.durationSec;
-          const diffPct = Math.abs(diff) / exp.durationSec;
-          const flag = diffPct > 0.25 ? ' ⚠ revisar' : '';
-          cortadorLogLine(`  ${i+1}. "${exp.title}" — esperado ${fmtDuration(exp.durationSec)}, detectado ${fmtDuration(detDur)}${flag}`);
-        }
-      });
-    }
-    cortadorLogLine('');
-  }
-
-  // Solo nos fiamos de "qué tema es cuál" para etiquetar si el número coincide exacto
-  const matchedExpectedTracks = (expectedTracks.length && finalSegments.length === expectedTracks.length)
-    ? expectedTracks
-    : null;
-
-  // Línea de tiempo: cada trozo tal cual se detectó al principio (antes de fusiones/descartes),
-  // marcado como conservado si cae dentro de alguno de los temas finales, o descartado si no.
-  const timelineSegs = rawDetectedSegments.map(rs => {
-    const fi = finalSegments.findIndex(fs => rs.startSec < fs.endWithPad && rs.endSec > fs.startTrimmed);
-    const kept = fi !== -1;
-    const label = kept && matchedExpectedTracks && matchedExpectedTracks[fi] ? matchedExpectedTracks[fi].title : '';
-    return { startSec: rs.startSec, endSec: rs.endSec, kept, label };
-  });
-
-  return { file, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks, totalDurationSec, timelineSegs };
-}
-
-async function previewCortador() {
-  if (!cortadorFileHandle || cortadorRunning) return;
-  const wantManual = !!document.getElementById('cortador-manualassoc')?.checked;
-  if (wantManual) { await startCortadorAssociation(); return; }
-  cortadorRunning = true;
-  cortadorLog = [];
-  cortadorTimelineData = null;
-  cortadorPreviewData = null;
-  renderCortador();
-  try {
-    const result = await analyzeCortador();
-    if (result) {
-      cortadorLogLine(`👁 Vista previa — ${result.finalSegments.length} temas (nada se ha guardado). Puedes ajustar los tiempos de cada uno arriba y escucharlos con ▶ antes de guardar.`);
-      cortadorTimelineData = { totalDurationSec: result.totalDurationSec, segs: result.timelineSegs };
-      cortadorPreviewData = result;
-    }
-  } catch(e) {
-    console.error(e);
-    cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
-  }
-  cortadorRunning = false;
-  renderCortador();
+// Genera destinos "Tema 1, Tema 2..." cuando no se han añadido discos de la sesión, para
+// que el desplegable de abajo siempre tenga algo real donde asignar (y fusionar) cada
+// trozo — no solo "Descartar". Si sí hay discos, se usan sus temas reales de Discogs tal cual.
+function ensureAssignableTargets(expectedTracksPre, segmentCount) {
+  if (expectedTracksPre.length) return expectedTracksPre;
+  return Array.from({ length: segmentCount }, (_, i) => ({
+    disc: null, position: String(i + 1), title: `Tema ${i + 1}`, durationSec: null, row: null,
+  }));
 }
 
 async function startCortadorAssociation() {
   if (!cortadorFileHandle || cortadorRunning) return;
   cortadorRunning = true;
   cortadorLog = [];
-  cortadorPreviewData = null; // se entra en modo manual: la vista previa normal ya no aplica
   renderCortador();
   try {
     const raw = await analyzeCortadorRaw();
     if (!raw) { cortadorRunning = false; renderCortador(); return; }
-    const expectedDurations = raw.expectedTracksPre.map(t => t.durationSec);
+    const expectedTracksPre = ensureAssignableTargets(raw.expectedTracksPre, raw.segments.length);
+    const expectedDurations = expectedTracksPre.map(t => t.durationSec);
     const assignments = computeDefaultAssignments(raw.segments, expectedDurations);
-    cortadorAssocData = { ...raw, assignments };
+    cortadorAssocData = { ...raw, expectedTracksPre, assignments };
     cortadorAssocActive = true;
-    cortadorLogLine('Sugerencia de asociación calculada. Revísala abajo y corrige lo que haga falta antes de guardar.');
+    cortadorLogLine('Sugerencia de asociación calculada. Revísala abajo: escucha cada trozo, corrige lo que haga falta, y fusiona los que en realidad sean el mismo tema asignándolos al mismo destino.');
   } catch(e) {
     console.error(e);
     cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
@@ -1888,23 +1712,6 @@ function setCortadorSegmentTime(idx, campo, valor) {
   if (campo === 'startSec' && v >= seg.endSec) { showToast('⚠ El inicio no puede ser después (o igual) que el final', true); renderCortador(); return; }
   if (campo === 'endSec' && v <= seg.startSec) { showToast('⚠ El final no puede ser antes (o igual) que el inicio', true); renderCortador(); return; }
   seg[campo] = v;
-  renderCortador();
-}
-
-// Igual que setCortadorSegmentTime, pero para un tema ya casado con Discogs en la vista
-// previa normal — lo que quede aquí es exactamente lo que se guardará al darle a "Cortar
-// y guardar" (no se vuelve a analizar desde cero, se usa este dato tal cual lo dejes).
-function setCortadorPreviewSegmentTime(i, campo, valor) {
-  const d = cortadorPreviewData;
-  if (!d) return;
-  const s = d.finalSegments[i];
-  if (!s) return;
-  const v = parseTimecode(valor);
-  if (v == null || v < 0) { showToast('⚠ No entiendo ese tiempo — usa m:ss o h:mm:ss', true); renderCortador(); return; }
-  if (v > d.totalDurationSec) { showToast('⚠ Eso está fuera de la duración del WAV', true); renderCortador(); return; }
-  if (campo === 'startTrimmed' && v >= s.endWithPad) { showToast('⚠ El inicio no puede ser después (o igual) que el final', true); renderCortador(); return; }
-  if (campo === 'endWithPad' && v <= s.startTrimmed) { showToast('⚠ El final no puede ser antes (o igual) que el inicio', true); renderCortador(); return; }
-  s[campo] = v;
   renderCortador();
 }
 
@@ -1982,71 +1789,6 @@ async function confirmCortadorAssociation() {
   }
   cortadorRunning = false;
   renderCortador();
-}
-
-async function runCortador() {
-  if (!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) return;
-  const wantManual = !!document.getElementById('cortador-manualassoc')?.checked;
-  if (wantManual) { await startCortadorAssociation(); return; }
-  cortadorRunning = true;
-  cortadorLog = [];
-  renderCortador();
-  try {
-    let result = cortadorPreviewData;
-    if (result) {
-      cortadorLogLine('Usando el corte que ya has revisado en la vista previa (con tus ajustes a mano, si hiciste alguno)...');
-    } else {
-      result = await analyzeCortador();
-      if (!result) { cortadorRunning = false; renderCortador(); return; }
-    }
-    cortadorTimelineData = { totalDurationSec: result.totalDurationSec, segs: result.timelineSegs };
-    await saveCortadorFinalSegments(result);
-    abrirAyudanteCaratulas();
-  } catch(e) {
-    console.error(e);
-    cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
-    showToast('⚠ Error al procesar el WAV', true);
-  }
-  cortadorPreviewData = null; // ya se ha usado — que la próxima vista previa sea nueva
-  cortadorRunning = false;
-  renderCortador();
-}
-
-// El bucle de guardado de verdad — lo comparten runCortador() (recién analizado o
-// reutilizando la vista previa) y, si hiciera falta en el futuro, cualquier otro sitio
-// que ya tenga un resultado de analyzeCortador() listo para escribir a disco.
-async function saveCortadorFinalSegments(result) {
-  const { file, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks } = result;
-
-  if (matchedExpectedTracks) {
-    cortadorLogLine('🏷 Se incrustarán título, artista, álbum, pista, año, género, sello, referencia de catálogo (en catálogo y compositor) y carátula (coincide el número de temas con Discogs).');
-  }
-
-  cortadorLogLine(`Detectados ${finalSegments.length} temas. Guardando...`);
-  const usedNames = new Set();
-  for (let i = 0; i < finalSegments.length; i++) {
-    const s = finalSegments[i];
-    let wavBuffer = await extractWavSegment(file, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
-    let baseName = String(i + 1);
-    if (matchedExpectedTracks) {
-      try {
-        wavBuffer = await embedTagsInWav(wavBuffer, matchedExpectedTracks[i]);
-      } catch(e) {
-        console.error('Error incrustando etiquetas:', e);
-      }
-      const pos = buildTrackFileName(matchedExpectedTracks[i], i);
-      if (pos) baseName = pos;
-    }
-    if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1); // por si dos posiciones salen iguales
-    usedNames.add(baseName);
-    const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
-    const writable = await outHandle.createWritable();
-    await writable.write(wavBuffer);
-    await writable.close();
-    cortadorLogLine(`✓ ${baseName}.wav — ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
-  }
-  cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
-  showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
 }
 
 function sanitizeFolderName(name) {
@@ -3404,38 +3146,6 @@ function renderBuscador() {
 }
 
 // ─── VISTA DEL CORTADOR DE RIPS ─────────────────────────────────────────────────
-// Bloque de revisión de la última vista previa normal (no manual): arriba del todo de la
-// pantalla, para no tener que bajar con el ratón a buscarlo. Cada tema se puede escuchar
-// y su tiempo de inicio/fin se puede tocar a mano — lo que quede aquí es lo que se guarda.
-function renderCortadorPreviewReview() {
-  const d = cortadorPreviewData;
-  if (!d) return '';
-  return `
-    <div class="config-section" style="border:2px solid var(--accent);background:var(--bg2)">
-      <h3>👁 Vista previa — ${d.finalSegments.length} tema(s) (nada guardado todavía)</h3>
-      <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Ajusta el tiempo de cualquier corte si hace falta y escúchalo con ▶. Cuando esté bien, dale a "Cortar y guardar" — se usa esto tal cual, sin volver a analizar.</p>
-      ${buildTimelineHtml(d.totalDurationSec, d.timelineSegs)}
-      <div class="tracklist" style="margin-top:10px">
-        ${d.finalSegments.map((s, i) => {
-          const track = d.matchedExpectedTracks ? d.matchedExpectedTracks[i] : null;
-          const dur = s.endWithPad - s.startTrimmed;
-          return `<div class="track-row" style="align-items:center;flex-wrap:wrap">
-            <button class="btn" style="font-size:12px;padding:4px 9px" onclick="playCortadorPreviewSegment(${i})" title="Escuchar este trozo tal cual está ahora mismo">▶</button>
-            <span class="track-pos" style="min-width:20px">${i + 1}</span>
-            ${track ? `<span style="font-size:12px;flex:1;min-width:110px;white-space:normal">${track.title}</span>` : `<span style="flex:1"></span>`}
-            <span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--text3)">
-              <input type="text" inputmode="numeric" value="${fmtTimecode(s.startTrimmed)}" title="Inicio — m:ss o h:mm:ss" style="width:78px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;font-family:monospace" onchange="setCortadorPreviewSegmentTime(${i}, 'startTrimmed', this.value)">
-              →
-              <input type="text" inputmode="numeric" value="${fmtTimecode(s.endWithPad)}" title="Fin — m:ss o h:mm:ss" style="width:78px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;font-family:monospace" onchange="setCortadorPreviewSegmentTime(${i}, 'endWithPad', this.value)">
-              <span style="white-space:nowrap">(${fmtDuration(dur)})</span>
-            </span>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
-  `;
-}
-
 function renderCortador() {
   if (cortadorAssocActive) { renderCortadorAssocEditor(); return; }
   const main = document.getElementById('main-content');
@@ -3470,8 +3180,6 @@ function renderCortador() {
         y te guardo cada uno como 1.wav, 2.wav, 3.wav... cortado justo donde empieza y 1 segundo después de acabar.
         El original no se toca.
       </p>
-
-      ${renderCortadorPreviewReview()}
 
       <div class="config-section">
         <h3>1. Archivo WAV grabado</h3>
@@ -3554,27 +3262,19 @@ function renderCortador() {
         </div>
         ${pendingDiscs ? `<p style="font-size:11px;color:var(--text3)">Trayendo datos de Discogs de ${pendingDiscs} disco(s)...</p>` : ''}
         ${expectedTracks.length ? `<p style="font-size:12px;color:var(--accent)">Discogs dice: ${expectedTracks.length} temas, ${fmtDuration(expectedTotalSec)} en total${expectedUnknownCount ? ` (${expectedUnknownCount} sin duración conocida)` : ''}.</p>` : ''}
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin-top:6px"><input id="cortador-manualassoc" type="checkbox" ${cortadorSettings.manualAssoc ? 'checked' : ''} onchange="onCortadorFieldChange()"> Revisar y asociar yo mismo cada trozo con su tema de Discogs, antes de guardar (en vez de automático)</label>
         ` : ''}
       </div>
 
-      <button class="btn" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px"
-        ${(!cortadorFileHandle || cortadorRunning) ? 'disabled' : ''}
-        onclick="previewCortador()">
-        ${cortadorRunning ? 'Procesando...' : '👁 Vista previa (no guarda nada)'}
-      </button>
       <button class="btn btn-accent" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px"
         ${(!cortadorFileHandle || !cortadorOutDirHandle || cortadorRunning) ? 'disabled' : ''}
-        onclick="runCortador()">
-        ${cortadorRunning ? 'Procesando...' : '✂️ Cortar y guardar'}
+        onclick="startCortadorAssociation()">
+        ${cortadorRunning ? 'Analizando...' : '👁 Revisar cortes y guardar'}
       </button>
 
       <a href="vinylbase-caratulas:run" class="btn" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-top:8px;text-decoration:none;box-sizing:border-box" title="Abre el programa 'Poner Carátulas' de tu PC (tiene que estar instalado y registrado una vez — ver el botón de ayuda)">
         🎨 Poner carátulas (abre el ayudante de tu PC)
       </a>
       <p style="font-size:11px;color:var(--text3);margin-top:6px">Esto abre el programa "Poner Carátulas" que tengas instalado en tu PC — hace falta haberlo ejecutado una vez para que se registre. Si no lo tienes, no pasa nada: el navegador simplemente no sabrá qué abrir.</p>
-
-      ${(!cortadorPreviewData && cortadorTimelineData) ? buildTimelineHtml(cortadorTimelineData.totalDurationSec, cortadorTimelineData.segs) : ''}
 
       ${cortadorLog.length ? `
       <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;font-family:monospace;color:var(--text2);max-height:300px;overflow-y:auto">
@@ -3762,7 +3462,6 @@ async function addCortadorSessionDisc(idx) {
   if (!releaseId) { showToast('⚠ Este disco no tiene release_id de Discogs', true); return; }
   cortadorSessionDiscs.push({ row });
   cortadorDiscSearchQ = '';
-  cortadorPreviewData = null; // ha cambiado la lista de discos: la vista previa ya no vale
   renderCortador();
   requestAnimationFrame(() => { document.getElementById('cortador-disc-search')?.focus(); }); // que puedas seguir escribiendo el siguiente sin volver a hacer clic
   await loadCoverForRow(row); // esto ya trae y cachea el tracklist con duraciones
@@ -3772,7 +3471,6 @@ async function addCortadorSessionDisc(idx) {
 
 function removeCortadorSessionDisc(i) {
   cortadorSessionDiscs.splice(i, 1);
-  cortadorPreviewData = null;
   renderCortador();
 }
 
@@ -3859,14 +3557,12 @@ async function addCortadorManualDisc() {
   if (!name) { showToast('⚠ Escribe un nombre para el disco', true); return; }
   if (!count || count < 1) { showToast('⚠ Indica cuántos temas tiene', true); return; }
   cortadorSessionDiscs.push({ manual: true, title: name, trackCount: count });
-  cortadorPreviewData = null;
   renderCortador();
 }
 
 function setCortadorCountOverride(i, value) {
   const n = parseInt(value, 10);
   cortadorSessionDiscs[i].countOverride = n > 0 ? n : null;
-  cortadorPreviewData = null;
   renderCortador();
 }
 
@@ -3874,7 +3570,6 @@ function onCortadorAutoToggle() {
   const auto = document.getElementById('cortador-auto')?.checked;
   const th = document.getElementById('cortador-threshold');
   if (th) th.disabled = auto;
-  cortadorPreviewData = null;
   readCortadorFormIntoSettings();
 }
 
@@ -3885,7 +3580,6 @@ function onCortadorFieldChange() {
   const mg = document.getElementById('cortador-mingap');
   const mgVal = document.getElementById('cortador-mingap-val');
   if (mg && mgVal) mgVal.textContent = mg.value + ' s';
-  cortadorPreviewData = null;
   readCortadorFormIntoSettings();
 }
 
