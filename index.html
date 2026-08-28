@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.109 — Dj Petrik</title>
+<title>VinylBase v2.110 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.109</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.110</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2168,6 +2168,7 @@ async function runAuditoriaRipeados() {
 
     const faltanCarpeta = [];  // marcado ripeado='sí' pero la carpeta no existe
     const faltanMarcar = [];   // la carpeta existe pero el Sheet no lo tiene marcado
+    const duplicadosPorRenombrado = []; // existen DOS carpetas reales: la de antes (con el "(N)") y la nueva (sin él)
 
     for (let i = 0; i < allData.length; i++) {
       const row = allData[i];
@@ -2177,9 +2178,18 @@ async function runAuditoriaRipeados() {
       if (!catalog && !artist && !title) continue;
 
       const expectedName = buildDiscFolderName(row);
+      // Nombre "de antes" — el mismo patrón pero SIN quitar el "(2)" de Discogs, para
+      // detectar si a este disco en concreto le afecta el cambio de nombre reciente.
+      const nombreViejo = sanitizeFolderName(`(${catalog}) ${artist} - ${title}`);
       const marcado = isRowRipped(row);
       const tieneCarpeta = folderSet.has(expectedName);
       if (tieneCarpeta) nombresUsados.add(expectedName);
+
+      if (nombreViejo !== expectedName && folderSet.has(nombreViejo) && folderSet.has(expectedName)) {
+        nombresUsados.add(nombreViejo);
+        duplicadosPorRenombrado.push({ idx: i, row, nombreNuevo: expectedName, nombreViejo });
+        continue; // este disco ya está cubierto por la sección de duplicados, no lo repitas abajo
+      }
 
       if (marcado && !tieneCarpeta) faltanCarpeta.push({ idx: i, row, expectedName });
       if (!marcado && tieneCarpeta) faltanMarcar.push({ idx: i, row, expectedName });
@@ -2192,6 +2202,7 @@ async function runAuditoriaRipeados() {
       totalMarcados: allData.filter(isRowRipped).length,
       faltanCarpeta,
       faltanMarcar,
+      duplicadosPorRenombrado,
       huerfanas,
     };
   } catch(e) {
@@ -2200,6 +2211,59 @@ async function runAuditoriaRipeados() {
   }
   auditoriaRunning = false;
   renderAuditoria();
+}
+
+// El usuario elige cuál de las dos carpetas reales se queda — mueve ahí todos los
+// archivos de la otra, y si al final queda vacía, la borra. Si algún archivo con el
+// mismo nombre YA existe en la carpeta elegida, no lo pisa: lo deja donde está y avisa.
+async function resolverCarpetaDuplicada(idx, nombreElegido, nombreDescartado) {
+  if (!confirm(`Se va a quedar "${nombreElegido}" — se moverán ahí los archivos de "${nombreDescartado}", y si queda vacía se borrará.\n\n¿Seguro?`)) return;
+  showToast('Moviendo archivos...');
+  try {
+    const root = await getRootDir();
+    if (!root) return;
+    const dirElegido = await root.getDirectoryHandle(nombreElegido);
+    const dirDescartado = await root.getDirectoryHandle(nombreDescartado);
+
+    let movidos = 0, saltados = 0;
+    const nombresArchivos = [];
+    for await (const [name, handle] of dirDescartado.entries()) {
+      if (handle.kind !== 'file') continue;
+      nombresArchivos.push(name);
+    }
+    for (const name of nombresArchivos) {
+      const fileHandle = await dirDescartado.getFileHandle(name);
+      let yaExiste = false;
+      try { await dirElegido.getFileHandle(name); yaExiste = true; } catch(e) { /* no existe, perfecto */ }
+      if (yaExiste) { saltados++; continue; }
+
+      const file = await fileHandle.getFile();
+      const buf = await file.arrayBuffer();
+      const destino = await dirElegido.getFileHandle(name, { create: true });
+      const writable = await destino.createWritable();
+      await writable.write(buf);
+      await writable.close();
+      await dirDescartado.removeEntry(name);
+      movidos++;
+    }
+
+    let quedanArchivos = false;
+    for await (const [, handle] of dirDescartado.entries()) { quedanArchivos = true; break; }
+    let borrada = false;
+    if (!quedanArchivos) {
+      await root.removeEntry(nombreDescartado, { recursive: true });
+      borrada = true;
+    }
+
+    showToast(`✓ ${movidos} archivo(s) movidos${saltados ? `, ${saltados} ya existían y no se tocaron` : ''}${borrada ? ` — "${nombreDescartado}" borrada` : ` — "${nombreDescartado}" no se borró porque aún tiene archivos`}`);
+    if (auditoriaResults) {
+      auditoriaResults.duplicadosPorRenombrado = auditoriaResults.duplicadosPorRenombrado.filter(e => e.idx !== idx);
+    }
+    renderAuditoria();
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ Error moviendo los archivos: ' + e.message, true);
+  }
 }
 
 function marcarRipeadoDesdeAuditoria(idx) {
@@ -2239,13 +2303,28 @@ function renderAuditoria() {
 }
 
 function renderAuditoriaResultados(r) {
-  const todoBien = r.faltanCarpeta.length === 0 && r.faltanMarcar.length === 0;
+  const todoBien = r.faltanCarpeta.length === 0 && r.faltanMarcar.length === 0 && (!r.duplicadosPorRenombrado || !r.duplicadosPorRenombrado.length);
   return `
     <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--text2)">
       📁 ${r.totalCarpetas.toLocaleString()} carpetas encontradas · ✓ ${r.totalMarcados.toLocaleString()} marcados como ripeados en el Sheet
     </div>
 
     ${todoBien ? `<p style="margin-top:14px;font-size:13px;color:var(--accent)">✓ Todo cuadra — ninguna discrepancia.</p>` : ''}
+
+    ${r.duplicadosPorRenombrado && r.duplicadosPorRenombrado.length ? `
+    <div style="margin-top:16px">
+      <div class="d-section" style="margin:0 0 8px">⚠ Dos carpetas para el mismo disco, por quitar el "(2)" (${r.duplicadosPorRenombrado.length})</div>
+      <p style="font-size:11px;color:var(--text3);margin-bottom:8px">Existen las dos versiones del nombre en disco de verdad. Elige cuál se queda — se mueven ahí los archivos de la otra, y si queda vacía se borra sola.</p>
+      <div class="tracklist">
+        ${r.duplicadosPorRenombrado.map(e => `<div class="track-row" style="flex-direction:column;align-items:stretch;gap:6px">
+          <span class="track-title" style="white-space:normal">${g(e.row,COL.artist)} — ${g(e.row,COL.title)} <span style="color:var(--text3)">(${g(e.row,COL.catalog)})</span></span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn" style="font-size:11px;flex:1" onclick="resolverCarpetaDuplicada(${e.idx}, '${escJ(e.nombreNuevo)}', '${escJ(e.nombreViejo)}')">Quedarme con: ${e.nombreNuevo}</button>
+            <button class="btn" style="font-size:11px;flex:1" onclick="resolverCarpetaDuplicada(${e.idx}, '${escJ(e.nombreViejo)}', '${escJ(e.nombreNuevo)}')">Quedarme con: ${e.nombreViejo}</button>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
 
     ${r.faltanMarcar.length ? `
     <div style="margin-top:16px">
