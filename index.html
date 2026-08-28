@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.106 — Dj Petrik</title>
+<title>VinylBase v2.109 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.106</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.109</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -361,7 +361,8 @@ const COL = {
   corte_problema: 28,
   formato_rip: 29,
   limpio: 30,
-  fecha_limpieza: 31
+  fecha_limpieza: 31,
+  limpieza_profunda: 32
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -374,6 +375,20 @@ let filterGenre = '';
 let sortCol = 'catalog';
 let sortDir = 1;
 let searchQ = '';
+
+// Ajustes de las estanterías Kallax — cuántos huecos activos hay y cuántos discos caben
+// en cada uno. Editable en Configuración, para poder ajustarlo sin tocar código si al
+// final no caben 100 en un hueco o se añaden más huecos en el futuro.
+const KALLAX_CONFIG_KEY = 'vinylbase_kallaxConfig';
+let kallaxConfig = { numHuecos: 13, porHueco: 100 };
+try {
+  const savedKallax = JSON.parse(localStorage.getItem(KALLAX_CONFIG_KEY) || 'null');
+  if (savedKallax) kallaxConfig = { ...kallaxConfig, ...savedKallax };
+} catch(e) { /* ignorar si no hay storage */ }
+function guardarKallaxConfig() {
+  try { localStorage.setItem(KALLAX_CONFIG_KEY, JSON.stringify(kallaxConfig)); } catch(e) { /* ignorar */ }
+}
+
 let newRec = {};
 let toastTimer = null;
 let saving = false;
@@ -2099,6 +2114,7 @@ async function resetearTodosLosRipeados() {
       { col: COL.formato_rip,    value: row[COL.formato_rip]    || '' },
       { col: COL.limpio,         value: row[COL.limpio]         || '' },
       { col: COL.fecha_limpieza, value: row[COL.fecha_limpieza] || '' },
+      { col: COL.limpieza_profunda, value: row[COL.limpieza_profunda] || '' },
       { col: COL.format,         value: row[COL.format]         || '' },
       { col: COL.fuente,         value: row[COL.fuente]         || '' },
     ];
@@ -2905,7 +2921,7 @@ function renderView() {
                   ? '<span class="badge badge-red">✕ Rayado</span>'
                   : (isRipped
                     ? '<span class="badge badge-green">✓ Ripeado</span>'
-                    : '<span class="badge badge-gray">Pendiente</span>')}${g(r,COL.limpio)==='Sí' ? ' 🧼' : ''}</td>
+                    : '<span class="badge badge-gray">Pendiente</span>')}${g(r,COL.limpio)==='Sí' ? ' 🧼' : ''}${g(r,COL.limpieza_profunda)==='Sí' ? ' <span title="Necesita limpieza profunda">⚠</span>' : ''}</td>
                 <td>${ripper
                   ? `<span class="avatar ${ripper.toLowerCase().includes('paquillo') ? 'av-paquillo' : 'av-you'}">${ripper.toLowerCase().includes('paquillo') ? 'PQ' : 'DJ'}</span>`
                   : ''}</td>
@@ -3079,9 +3095,13 @@ function renderDetail(row) {
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="badge ${g(row,COL.limpio)==='Sí'?'badge-green':'badge-gray'}">${g(row,COL.limpio)==='Sí'?'🧼 Limpio':'Sin limpiar'}</span>
         ${g(row,COL.limpio)==='Sí' && g(row,COL.fecha_limpieza) ? `<span style="font-size:10px;color:var(--text3)">${g(row,COL.fecha_limpieza)}</span>` : ''}
+        ${g(row,COL.limpieza_profunda)==='Sí' ? `<span class="badge badge-red">⚠ Necesita limpieza profunda</span>` : ''}
       </div>
       <button class="btn ${g(row,COL.limpio)==='Sí'?'':'btn-accent'}" style="width:100%;justify-content:center;margin-top:6px" onclick="toggleLimpio(${allData.indexOf(row)})">
         ${g(row,COL.limpio)==='Sí' ? '✕ Marcar sin limpiar' : '🧼 Marcar como limpio'}
+      </button>
+      <button class="btn ${g(row,COL.limpieza_profunda)==='Sí'?'':''}" style="width:100%;justify-content:center;margin-top:6px;${g(row,COL.limpieza_profunda)==='Sí'?'color:#c0392b;border-color:#c0392b':''}" onclick="toggleLimpiezaProfunda(${allData.indexOf(row)})" title="Ya pasó por el ultrasonidos pero al escucharlo aún tiene ruidos/chasquidos — necesita otra pasada más a fondo">
+        ${g(row,COL.limpieza_profunda)==='Sí' ? '✕ Ya no necesita limpieza profunda' : '⚠ Marcar: necesita limpieza profunda'}
       </button>
 
       <div class="d-label" style="margin:10px 0 4px">Cantidad de copias</div>
@@ -3126,6 +3146,9 @@ function renderDetail(row) {
       ${isVinyl(row) ? `<button class="btn" style="font-size:11px;color:#c0392b;margin-top:6px" onclick="reclasificarComoDigital(${allData.indexOf(row)})" title="Para discos que en realidad nunca fueron vinilo — se metieron en Discogs como si lo fueran hace tiempo">🔁 Esto no era vinilo de verdad — reclasificar a digital</button>` : ''}
 
       <div class="d-section">Ubicación Kallax</div>
+      <button class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:8px" onclick="colocarKallaxAutomatico(${allData.indexOf(row)})" title="Calcula el hueco que le toca por orden de catálogo, y qué otros discos hay que mover para hacerle sitio">
+        📐 Colocar automáticamente por catálogo
+      </button>
       ${renderKallax(g(row, COL.kallax_slot), 'setKallaxSlot.bind(null,' + allData.indexOf(row) + ')')}
 
       <div class="d-section">Carátula</div>
@@ -3252,6 +3275,14 @@ function renderConfig() {
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn" onclick="reloadData()">Recargar datos del Sheet</button>
           <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit" target="_blank" class="btn">Abrir Google Sheet ↗</a>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>Estanterías Kallax</h3>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Cuántos huecos hay activos ahora mismo (los que se usan para colocar automáticamente por catálogo) y cuántos discos caben en cada uno.</p>
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          <div class="field-g"><label>Huecos activos</label><input type="number" min="1" value="${kallaxConfig.numHuecos}" style="width:80px" onchange="kallaxConfig.numHuecos=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
+          <div class="field-g"><label>Discos por hueco</label><input type="number" min="1" value="${kallaxConfig.porHueco}" style="width:80px" onchange="kallaxConfig.porHueco=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
         </div>
       </div>
       ${renderResetRipeadosSection()}
@@ -4051,6 +4082,16 @@ function toggleLimpio(idx) {
   saveToSheet(idx);
 }
 
+function toggleLimpiezaProfunda(idx) {
+  const row = allData[idx];
+  const necesita = g(row, COL.limpieza_profunda) === 'Sí';
+  row[COL.limpieza_profunda] = necesita ? 'No' : 'Sí';
+  selectedRow = row;
+  renderView();
+  showToast(necesita ? 'Ya no necesita limpieza profunda' : '⚠ Marcado: necesita limpieza profunda');
+  saveToSheet(idx);
+}
+
 function setField(idx, col, value) {
   const current = allData[idx][col];
   allData[idx][col] = current === String(value) ? '' : String(value);
@@ -4212,6 +4253,7 @@ async function saveToSheet(idx) {
     { col: COL.formato_rip,    value: row[COL.formato_rip]    || '' },
     { col: COL.limpio,         value: row[COL.limpio]         || '' },
     { col: COL.fecha_limpieza, value: row[COL.fecha_limpieza] || '' },
+    { col: COL.limpieza_profunda, value: row[COL.limpieza_profunda] || '' },
     { col: COL.format,         value: row[COL.format]         || '' },
     { col: COL.fuente,         value: row[COL.fuente]         || '' },
   ];
@@ -4501,6 +4543,80 @@ const KALLAX_4x4 = [
   [null, null, null, null], // fila 4: no se usa
 ];
 
+// Comparación "natural" para las referencias de catálogo: STK9 tiene que ir ANTES que
+// STK10, no después (que es lo que saldría con una comparación de texto normal, porque
+// el carácter '1' es "menor" que el '9' letra a letra).
+function compareNatural(a, b) {
+  const re = /(\d+)|(\D+)/g;
+  const pa = String(a || '').match(re) || [];
+  const pb = String(b || '').match(re) || [];
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const xa = pa[i] || '', xb = pb[i] || '';
+    if (xa === xb) continue;
+    const na = /^\d+$/.test(xa), nb = /^\d+$/.test(xb);
+    if (na && nb) {
+      const diff = parseInt(xa, 10) - parseInt(xb, 10);
+      if (diff !== 0) return diff;
+    } else {
+      const cmp = xa.localeCompare(xb);
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return 0;
+}
+
+// Calcula dónde debería ir CADA disco ya colocado (más el nuevo, idxNuevo) si se ordenan
+// todos por referencia de catálogo y se reparten en tandas de kallaxConfig.porHueco por
+// hueco — hueco 1 se lleva las referencias más bajas, el último hueco activo las más
+// altas. Solo devuelve los que de verdad cambian de hueco respecto a donde están ahora
+// (normalmente muy pocos, los que caen justo en el borde entre dos huecos).
+function calcularRecolocacionKallax(idxNuevo) {
+  const idxSet = new Set();
+  allData.forEach((r, i) => { if (g(r, COL.kallax_slot)) idxSet.add(i); });
+  idxSet.add(idxNuevo);
+  const idxs = [...idxSet];
+  idxs.sort((ia, ib) => compareNatural(g(allData[ia], COL.catalog), g(allData[ib], COL.catalog)));
+
+  const overflow = idxs.length > kallaxConfig.numHuecos * kallaxConfig.porHueco;
+  const moves = [];
+  idxs.forEach((i, pos) => {
+    const huecoIdeal = Math.min(kallaxConfig.numHuecos, Math.floor(pos / kallaxConfig.porHueco) + 1);
+    const huecoActual = g(allData[i], COL.kallax_slot);
+    if (String(huecoActual) !== String(huecoIdeal)) {
+      moves.push({ idx: i, from: huecoActual || null, to: huecoIdeal });
+    }
+  });
+  return { moves, overflow, total: idxs.length };
+}
+
+async function colocarKallaxAutomatico(idx) {
+  const { moves, overflow, total } = calcularRecolocacionKallax(idx);
+  if (overflow) {
+    showToast(`⚠ No caben todos: ${total} discos para ${kallaxConfig.numHuecos} huecos de ${kallaxConfig.porHueco} — ajusta esto en Configuración`, true);
+    return;
+  }
+  if (!moves.length) {
+    showToast('✓ Ya está en el hueco que le toca por orden de catálogo — no hay que mover nada');
+    return;
+  }
+  const texto = moves.map(m => {
+    const r = allData[m.idx];
+    const nombre = `${g(r, COL.artist)} — ${g(r, COL.title)}${g(r, COL.catalog) ? ' (' + g(r, COL.catalog) + ')' : ''}`;
+    return m.from ? `${nombre}: hueco ${m.from} → ${m.to}` : `${nombre}: → hueco ${m.to} (nuevo)`;
+  }).join('\n');
+  if (!confirm(`Por orden de catálogo, hay que mover ${moves.length} disco(s) para hacer sitio:\n\n${texto}\n\nMuévelos físicamente en la estantería y dale a Aceptar para guardar la nueva colocación.`)) return;
+
+  showToast(`Guardando la nueva colocación de ${moves.length} disco(s)...`);
+  moves.forEach(m => { allData[m.idx][COL.kallax_slot] = String(m.to); });
+  selectedRow = allData[idx];
+  renderView();
+  for (const m of moves) {
+    await saveToSheet(m.idx);
+  }
+  showToast(`✓ Colocación actualizada — ${moves.length} disco(s) movidos`);
+}
+
 function renderKallax(selectedSlot, onSelect) {
   // Contar cuántos discos hay ya en cada hueco (no solo si está ocupado o no)
   const counts = {};
@@ -4519,10 +4635,10 @@ function renderKallax(selectedSlot, onSelect) {
           const isSel = String(selectedSlot) === String(slot);
           const count = counts[slot] || 0;
           const isOcc = count > 0 && !isSel;
-          const lleno = count >= 100;
-          return `<div class="kc ${isSel ? 'on' : isOcc ? 'occupied' : ''}" onclick="${onSelect}(${slot})" title="Hueco ${slot} — ${count}/100 discos">
+          const lleno = count >= kallaxConfig.porHueco;
+          return `<div class="kc ${isSel ? 'on' : isOcc ? 'occupied' : ''}" onclick="${onSelect}(${slot})" title="Hueco ${slot} — ${count}/${kallaxConfig.porHueco} discos">
             <div>${slot}</div>
-            <div style="font-size:8px;font-weight:500;${lleno ? 'color:#e05252;font-weight:700' : 'opacity:.7'}">${count}/100</div>
+            <div style="font-size:8px;font-weight:500;${lleno ? 'color:#e05252;font-weight:700' : 'opacity:.7'}">${count}/${kallaxConfig.porHueco}</div>
           </div>`;
         }).join('')).join('')}
       </div>
@@ -4544,15 +4660,23 @@ function setKallaxSlot(idx, slot) {
 }
 
 // ─── SEARCH ──────────────────────────────────────────────────────────────────
+// Con miles de discos, redibujar la tabla entera en CADA tecla se nota — se siente como
+// si no respondiera, y da la sensación de tener que borrar y volver a escribir. Se espera
+// un pelín (200ms) sin que toques más teclas antes de redibujar de verdad; mientras tanto
+// escribes sobre el propio campo, sin tocarlo, así que va fino sin importar la velocidad.
+let searchDebounceTimer = null;
 function onSearch(val) {
   searchQ = val;
-  const pos = val.length;
-  renderView();
-  // Restaurar foco y posición del cursor después del render
-  requestAnimationFrame(() => {
-    const inp = document.getElementById('search-input');
-    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
-  });
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    const pos = val.length;
+    renderView();
+    // Restaurar foco y posición del cursor después del render
+    requestAnimationFrame(() => {
+      const inp = document.getElementById('search-input');
+      if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+    });
+  }, 200);
 }
 
 // ─── START ────────────────────────────────────────────────────────────────────
