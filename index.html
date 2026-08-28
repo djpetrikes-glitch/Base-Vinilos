@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.99 — Dj Petrik</title>
+<title>VinylBase v2.100 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.99</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.100</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3065,6 +3065,11 @@ function renderDetail(row) {
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
         Ver en Discogs ↗
       </a>` : ''}
+
+      <div class="d-section">Zona peligrosa</div>
+      <button class="btn" style="width:100%;justify-content:center;color:#c0392b;border-color:#c0392b" onclick="borrarDiscoDesdeFicha(${allData.indexOf(row)})">
+        🗑 Borrar este disco del Sheet
+      </button>
     </div>
     ${isV ? `<div class="detail-actions">
       <button class="btn" onclick="createFolderForRow(${allData.indexOf(row)})">
@@ -4036,6 +4041,38 @@ async function deleteFromSheet(row) {
   });
 }
 
+async function borrarDiscoDesdeFicha(idx) {
+  const row = allData[idx];
+  if (!row) return;
+  const nombre = `${g(row, COL.artist)} — ${g(row, COL.title)}`;
+  if (!g(row, COL.release_id)) {
+    showToast('⚠ Este disco no tiene release_id — no puedo identificarlo con seguridad en el Sheet. Bórralo directamente ahí, a mano.', true);
+    return;
+  }
+  if (!confirm(`¿Seguro que quieres borrar esta línea del Sheet?\n\n${nombre}\n\nEsto no se puede deshacer.`)) return;
+
+  showToast('Borrando...');
+  try {
+    await deleteFromSheet(row);
+    await new Promise(r => setTimeout(r, 1200));
+    let ok = await verifyDeleted(row);
+    if (!ok) {
+      await deleteFromSheet(row);
+      await new Promise(r => setTimeout(r, 1200));
+      ok = await verifyDeleted(row);
+    }
+    if (ok) {
+      showToast('✓ Línea borrada del Sheet');
+      await reloadData();
+    } else {
+      showToast('⚠ No se pudo confirmar el borrado — bórralo directamente en el Sheet', true);
+    }
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ Error borrando', true);
+  }
+}
+
 async function verifyDeleted(row) {
   try {
     const res = await fetch(APPS_SCRIPT_URL, { method: 'GET' });
@@ -4201,6 +4238,15 @@ async function searchDiscogs() {
     const res = await fetch(`https://api.discogs.com/database/search?q=${encodeURIComponent(q)}&type=release&per_page=6&format=Vinyl`, {
       headers: DISCOGS_HEADERS
     });
+    if (!res.ok) {
+      const cuerpo = await res.text();
+      let motivo = `HTTP ${res.status}`;
+      try { motivo = JSON.parse(cuerpo).message || motivo; } catch(e) {}
+      if (res.status === 429) motivo = 'Demasiadas peticiones seguidas a Discogs — espera un minuto y prueba otra vez.';
+      showToast('⚠ Discogs respondió con error: ' + motivo, true);
+      document.getElementById('discogs-btn-label').textContent = 'Buscar en Discogs';
+      return;
+    }
     const data = await res.json();
     const results = (data.results || []).slice(0, 6);
     const box = document.getElementById('discogs-results');
@@ -4217,7 +4263,7 @@ async function searchDiscogs() {
     }
     box.style.display = 'block';
   } catch(e) {
-    showToast('⚠ Error conectando con Discogs', true);
+    showToast('⚠ No se pudo conectar con Discogs (fallo de red) — prueba otra vez en un momento', true);
   }
   document.getElementById('discogs-btn-label').textContent = 'Buscar en Discogs';
 }
