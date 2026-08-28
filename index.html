@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.104 — Dj Petrik</title>
+<title>VinylBase v2.106 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.104</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.106</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -438,6 +438,8 @@ async function restoreDirHandles() {
   }
   const co = await loadDirHandle('cortadorOut');
   if (co) cortadorOutDirHandle = co;
+  const cf = await loadDirHandle('cortadorFile');
+  if (cf) cortadorFileHandle = cf;
 }
 
 async function reconnectDir(kind) {
@@ -641,7 +643,9 @@ async function pickCortadorFile() {
       multiple: false,
     });
     cortadorFileHandle = handle;
+    await saveDirHandle('cortadorFile', handle); // para recordarlo aunque cambies de versión o recargues
     cortadorValidatedTracks = {}; // archivo nuevo: lo validado antes ya no aplica
+    guardarProgresoCortador();
     renderCortador();
   } catch(e) { /* selección cancelada */ }
 }
@@ -1694,13 +1698,22 @@ async function startCortadorAssociation() {
   try {
     const raw = await analyzeCortadorRaw();
     if (!raw) { cortadorRunning = false; renderCortador(); return; }
-    const allTargets = ensureAssignableTargets(raw.expectedTracksPre, raw.segments.length);
+
+    // El reanálisis vuelve a detectar silencios en TODO el archivo, incluida la parte ya
+    // validada — sin quitar esos trozos "fantasma", salían en la lista sin ningún destino
+    // real al que asignarlos (su tema ya no está en el desplegable), liando la numeración,
+    // la línea de tiempo, y dejándote sin poder re-elegirlos bien. Los quitamos aquí.
+    const rangosValidados = Object.values(cortadorValidatedTracks).map(e => [e.startSec, e.endSec]);
+    const seSolapaConValidado = seg => rangosValidados.some(([vs, ve]) => seg.startSec < ve && seg.endSec > vs);
+    const segments = raw.segments.filter(s => !seSolapaConValidado(s));
+
+    const allTargets = ensureAssignableTargets(raw.expectedTracksPre, segments.length);
     // Los ya validados no entran en el reparto de este análisis — se guardan aparte tal
     // cual estaban, y no se ofrecen como destino para los trozos recién detectados.
     const expectedTracksPre = allTargets.filter(t => !cortadorValidatedTracks[t.position]);
     const expectedDurations = expectedTracksPre.map(t => t.durationSec);
-    const assignments = computeDefaultAssignments(raw.segments, expectedDurations);
-    cortadorAssocData = { ...raw, expectedTracksPre, assignments };
+    const assignments = computeDefaultAssignments(segments, expectedDurations);
+    cortadorAssocData = { ...raw, segments, expectedTracksPre, assignments };
     cortadorAssocActive = true;
     const nValidados = allTargets.length - expectedTracksPre.length;
     cortadorLogLine('Sugerencia de asociación calculada. Revísala abajo: escucha cada trozo, corrige lo que haga falta, y fusiona los que en realidad sean el mismo tema asignándolos al mismo destino.'
@@ -1752,6 +1765,7 @@ function validateCortadorTrack(segIdx) {
   d.expectedTracksPre = d.expectedTracksPre.filter((t, j) => j !== targetIdx);
 
   showToast(`✓ "${target.title}" validado — no se volverá a analizar`);
+  guardarProgresoCortador();
   renderCortador();
 }
 
@@ -1772,6 +1786,7 @@ function unlockCortadorValidatedTrack(position) {
     cortadorAssocData.assignments = [...cortadorAssocData.assignments, newTargetIdx];
   }
   showToast(`"${entry.track.title}" ya no está validado — corrige el tema o el tiempo y vuelve a marcarlo`);
+  guardarProgresoCortador();
   renderCortador();
 }
 
@@ -1896,6 +1911,7 @@ async function confirmCortadorAssociation() {
       cortadorAssocActive = false;
       cortadorAssocData = null;
       cortadorValidatedTracks = {};
+      guardarProgresoCortador();
       abrirAyudanteCaratulas();
     }
   } catch(e) {
@@ -1976,6 +1992,66 @@ let auditoriaResults = null; // { totalCarpetas, totalMarcados, faltanCarpeta, f
 function isRowRipped(row) {
   const v = g(row, COL.ripeado).toLowerCase();
   return v === 'si' || v === 'sí';
+}
+
+// ─── PROGRESO DEL CORTADOR (para no perderlo al cambiar de versión o recargar) ─────────
+// Se guarda solo, sin botón — igual que ya pasa con la carpeta de salida o los ajustes.
+// Solo guarda datos puros (nada de archivos ni handles, eso va por loadDirHandle/
+// saveDirHandle aparte): qué discos hay en la sesión, y qué temas ya están validados.
+const CORTADOR_PROGRESS_KEY = 'vinylbase_cortadorProgress';
+
+function guardarProgresoCortador() {
+  try {
+    const sessionDiscsData = cortadorSessionDiscs.map(e => {
+      if (e.manual) return { manual: true, title: e.title, trackCount: e.trackCount, trackTitles: e.trackTitles || null };
+      return { releaseId: g(e.row, COL.release_id), countOverride: e.countOverride || null };
+    });
+    const validatedData = {};
+    Object.entries(cortadorValidatedTracks).forEach(([position, e]) => {
+      validatedData[position] = { startSec: e.startSec, endSec: e.endSec };
+    });
+    localStorage.setItem(CORTADOR_PROGRESS_KEY, JSON.stringify({ sessionDiscs: sessionDiscsData, validatedTracks: validatedData }));
+  } catch(e) { /* si falla, simplemente no se recuerda para la próxima vez */ }
+}
+
+// Se llama una vez al arrancar, después de tener allData cargado (hace falta para volver
+// a encontrar los discos por su release_id) — reconstruye los discos de la sesión y, una
+// vez con sus tracklists ya cargadas, los temas que ya tenías validados.
+async function restaurarProgresoCortador() {
+  try {
+    const raw = localStorage.getItem(CORTADOR_PROGRESS_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+
+    const discosRestaurados = [];
+    for (const e of (data.sessionDiscs || [])) {
+      if (e.manual) {
+        discosRestaurados.push({ manual: true, title: e.title, trackCount: e.trackCount, trackTitles: e.trackTitles || undefined });
+      } else if (e.releaseId) {
+        const row = allData.find(r => g(r, COL.release_id) === e.releaseId);
+        if (row) discosRestaurados.push({ row, countOverride: e.countOverride || null });
+      }
+    }
+    if (!discosRestaurados.length && !Object.keys(data.validatedTracks || {}).length) return;
+
+    cortadorSessionDiscs = discosRestaurados;
+    // Esperar a que lleguen las carátulas/tracklists de Discogs antes de intentar
+    // reconstruir los ya validados (los necesita para encontrar el tema exacto).
+    await Promise.all(cortadorSessionDiscs.filter(e => !e.manual).map(e => loadCoverForRow(e.row)));
+
+    const validadosRestaurados = {};
+    for (const [position, v] of Object.entries(data.validatedTracks || {})) {
+      const discIdx = parseInt(position.split('-')[0], 10) - 1;
+      const tracks = getTracksForSessionDisc(discIdx);
+      const track = tracks.find(t => t.position === position);
+      if (track) validadosRestaurados[position] = { track, startSec: v.startSec, endSec: v.endSec };
+    }
+    cortadorValidatedTracks = validadosRestaurados;
+
+    showToast(`✓ Recuperado lo que tenías en el Cortador: ${discosRestaurados.length} disco(s) de sesión, ${Object.keys(validadosRestaurados).length} tema(s) ya validados`);
+  } catch(e) {
+    console.error('No se pudo restaurar el progreso del Cortador:', e);
+  }
 }
 
 // ─── RESETEAR TODOS LOS RIPEADOS (botón de un solo uso, para volver a empezar de cero) ──
@@ -2576,6 +2652,7 @@ async function playTrack(idx, trackIndex) {
 async function init() {
   await restoreDirHandles();
   await loadData();
+  await restaurarProgresoCortador();
   renderStats();
   renderView();
 }
@@ -3731,6 +3808,7 @@ async function addCortadorSessionDisc(idx) {
   if (!releaseId) { showToast('⚠ Este disco no tiene release_id de Discogs', true); return; }
   cortadorSessionDiscs.push({ row });
   cortadorDiscSearchQ = '';
+  guardarProgresoCortador();
   renderCortador();
   requestAnimationFrame(() => { document.getElementById('cortador-disc-search')?.focus(); }); // que puedas seguir escribiendo el siguiente sin volver a hacer clic
   await loadCoverForRow(row); // esto ya trae y cachea el tracklist con duraciones
@@ -3748,6 +3826,7 @@ function removeCortadorSessionDisc(i) {
     const discNum = parseInt(position.split('-')[0], 10);
     if (discNum >= discoQuitadoNum) delete cortadorValidatedTracks[position];
   }
+  guardarProgresoCortador();
   renderCortador();
 }
 
@@ -3840,12 +3919,14 @@ async function addCortadorManualDisc() {
   if (!name) { showToast('⚠ Escribe un nombre para el disco', true); return; }
   if (!trackTitles.length) { showToast('⚠ Escribe al menos un tema, uno por línea', true); return; }
   cortadorSessionDiscs.push({ manual: true, title: name, trackCount: trackTitles.length, trackTitles });
+  guardarProgresoCortador();
   renderCortador();
 }
 
 function setCortadorCountOverride(i, value) {
   const n = parseInt(value, 10);
   cortadorSessionDiscs[i].countOverride = n > 0 ? n : null;
+  guardarProgresoCortador();
   renderCortador();
 }
 
