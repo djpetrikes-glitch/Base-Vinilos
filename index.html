@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.102 — Dj Petrik</title>
+<title>VinylBase v2.104 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.102</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.104</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -324,8 +324,11 @@
       <div class="field-g"><label>Notas</label><input id="f-notes" placeholder="Notas opcionales" oninput="updateNewRec('notes',this.value)"></div>
       <div class="field-g">
         <label>ID / Release de Discogs (opcional)</label>
-        <input id="f-release-id" placeholder="Pega el ID o la URL de discogs.com/release/1234567..." oninput="updateNewRec('releaseId',this.value)">
-        <div style="font-size:10px;color:var(--text3);margin-top:3px">Es la misma referencia que usa Mp3tag para identificar el disco. Si la pones, la app ya podrá traer la carátula sola y usarlo en el Cortador — igual que si viniera de la búsqueda de arriba.</div>
+        <div style="display:flex;gap:6px">
+          <input id="f-release-id" placeholder="Pega el ID o la URL de discogs.com/release/1234567..." oninput="updateNewRec('releaseId',this.value)" style="flex:1">
+          <button class="btn" style="white-space:nowrap" onclick="buscarPorReleaseId()">🔍 Rellenar desde este ID</button>
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px">Es la misma referencia que usa Mp3tag para identificar el disco. Si lo pones y le das a "Rellenar", la app trae artista, título, año, sello y carátula sola — no hace falta escribirlos a mano.</div>
       </div>
     </div>
     <div class="modal-foot">
@@ -3606,6 +3609,10 @@ function renderCortadorAssocEditor() {
   const missingExpected = expected.map((t, i) => i).filter(i => !usedExpIdx.has(i));
 
   const validatedList = Object.entries(cortadorValidatedTracks); // [ [position, {track, startSec, endSec}], ... ]
+  // Solo para el número que se muestra en cada fila (no afecta a nada funcional): sigue
+  // contando a partir de los que ya están validados, en vez de reiniciar en 1 cada vez
+  // que se reanaliza — así el número de cada trozo refleja su posición real en la sesión.
+  const numeracionBase = validatedList.length;
 
   const timelineSegs = [
     ...segments.map((seg, i) => {
@@ -3663,7 +3670,7 @@ function renderCortadorAssocEditor() {
           }
           return `<div class="track-row" style="align-items:center;flex-wrap:wrap">
             <button class="btn" style="font-size:12px;padding:4px 9px" onclick="playCortadorSegment(${seg.startSec}, ${seg.endSec})" title="Escuchar este trozo tal cual está ahora mismo">▶</button>
-            <span class="track-pos" style="min-width:20px">${i+1}</span>
+            <span class="track-pos" style="min-width:20px">${i+1+numeracionBase}</span>
             <span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--text3)">
               <input type="text" inputmode="numeric" value="${fmtTimecode(seg.startSec)}" title="Inicio — m:ss o h:mm:ss" style="width:78px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;font-family:monospace" onchange="setCortadorSegmentTime(${i}, 'startSec', this.value)">
               →
@@ -4176,6 +4183,47 @@ function extractDiscogsReleaseId(input) {
   const s = (input || '').trim();
   const m = s.match(/(\d{4,})/);
   return m ? m[1] : '';
+}
+
+// Con el ID de Discogs ya no hace falta escribir artista/título a mano — se piden
+// directamente a Discogs (endpoint de la ficha del release, no el de búsqueda, así que
+// no depende de que "Buscar en Discogs" esté funcionando ahora mismo).
+async function buscarPorReleaseId() {
+  const idLimpio = extractDiscogsReleaseId(document.getElementById('f-release-id')?.value);
+  if (!idLimpio) { showToast('⚠ Escribe o pega un ID o una URL de Discogs válidos primero', true); return; }
+
+  showToast('Trayendo los datos de Discogs...');
+  try {
+    const res = await fetch(`https://api.discogs.com/releases/${idLimpio}`, { headers: DISCOGS_HEADERS });
+    if (!res.ok) {
+      let motivo = `HTTP ${res.status}`;
+      try { motivo = (await res.json()).message || motivo; } catch(e) {}
+      if (res.status === 429) motivo = 'Demasiadas peticiones seguidas a Discogs — espera un minuto y prueba otra vez.';
+      showToast('⚠ Discogs respondió con error: ' + motivo, true);
+      return;
+    }
+    const data = await res.json();
+
+    const artistas = (data.artists || []).map(a => a.name).join(', ');
+    if (artistas) { newRec.artist = artistas; document.getElementById('f-artist').value = artistas; }
+    if (data.title) { newRec.title = data.title; document.getElementById('f-title').value = data.title; }
+    if (data.year) { newRec.year = String(data.year); document.getElementById('f-year').value = data.year; }
+    const labelObj = (data.labels && data.labels[0]) || null;
+    if (labelObj && labelObj.name) { newRec.label = labelObj.name; document.getElementById('f-label').value = labelObj.name; }
+    if (labelObj && labelObj.catno) { newRec.catalog = labelObj.catno; document.getElementById('f-catalog').value = labelObj.catno; }
+    const genero = (data.genres && data.genres[0]) || '';
+    if (genero) {
+      const sel = document.getElementById('f-genre');
+      if (sel && [...sel.options].some(o => o.value === genero)) { sel.value = genero; newRec.genre = genero; }
+    }
+    if (data.images && data.images.length) {
+      newRec.thumb = data.images[0].uri150 || data.images[0].uri || '';
+    }
+    showToast('✓ Datos traídos de Discogs — revisa que estén bien y añade el disco');
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ No se pudo conectar con Discogs para traer los datos — rellena artista y título a mano por ahora', true);
+  }
 }
 
 async function addRecord() {
