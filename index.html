@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.86 — Dj Petrik</title>
+<title>VinylBase v2.88 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.86</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.88</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -574,6 +574,12 @@ let cortadorDiscSearchQ = '';
 // Línea de tiempo de la última vista previa / corte / asociación, para cruzarla con Audition.
 let cortadorTimelineData = null; // { totalDurationSec, segs: [{startSec, endSec, kept, label}] }
 
+// Resultado de la última "Vista previa" normal (no manual): igual que cortadorAssocData,
+// pero con los cortes ya casados con los temas de Discogs. Se puede editar el tiempo de
+// cada uno aquí mismo, y "Cortar y guardar" usa esto directamente si existe, en vez de
+// volver a analizar desde cero — así no se pierden los ajustes a mano que hayas hecho.
+let cortadorPreviewData = null; // { file, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks, totalDurationSec, timelineSegs }
+
 // Reproductor de un trozo detectado suelto, para poder escucharlo mientras se asocia
 // a mano — evita tener que adivinar solo por la duración qué tema es cada uno.
 let cortadorPreviewAudio = null;
@@ -582,7 +588,7 @@ let cortadorPreviewAudioUrl = null;
 // Modo de revisión/asociación manual: cuando está activo, se para justo antes de
 // guardar y deja que el usuario diga a mano qué trozo va con qué tema de Discogs.
 let cortadorAssocActive = false;
-let cortadorAssocData = null; // { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments }
+let cortadorAssocData = null; // { file, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments }
 
 // Ajustes del cortador — se recuerdan de una vez a otra (localStorage), no solo dentro
 // de esta sesión, para que tocar "Cortar" nunca los borre ni haga falta repetirlos.
@@ -632,6 +638,8 @@ async function pickCortadorFile() {
       multiple: false,
     });
     cortadorFileHandle = handle;
+    cortadorPreviewData = null; // archivo nuevo: la vista previa anterior ya no vale
+    cortadorTimelineData = null;
     renderCortador();
   } catch(e) { /* selección cancelada */ }
 }
@@ -644,7 +652,7 @@ async function pickCortadorOutDir() {
   } catch(e) { /* selección cancelada */ }
 }
 
-function parseWavHeader(buffer) {
+function parseWavHeader(buffer, totalFileSize) {
   const view = new DataView(buffer);
   if (view.getUint32(0, false) !== 0x52494646) throw new Error('No es un WAV válido (falta cabecera RIFF)');
   if (view.getUint32(8, false) !== 0x57415645) throw new Error('No es un WAV válido (falta cabecera WAVE)');
@@ -662,7 +670,12 @@ function parseWavHeader(buffer) {
       };
     } else if (chunkId === 0x64617461) { // 'data'
       dataOffset = offset + 8;
-      dataLength = Math.min(chunkSize, view.byteLength - dataOffset);
+      // Si solo tenemos un trozo pequeño de cabecera (no el archivo entero en memoria),
+      // el tamaño real disponible hay que sacarlo de totalFileSize, no de view.byteLength
+      // (que en ese caso solo sería el tamaño del trocito leído, no del archivo real).
+      const tope = (totalFileSize != null ? totalFileSize : view.byteLength) - dataOffset;
+      dataLength = Math.min(chunkSize, tope);
+      break; // ya tenemos lo que hace falta — no seguir leyendo cabeceras de más
     }
     offset += 8 + chunkSize + (chunkSize % 2);
   }
@@ -671,8 +684,10 @@ function parseWavHeader(buffer) {
   return { fmt, dataOffset, dataLength };
 }
 
-// Calcula un "envolvente" de amplitud (RMS por ventana) sin duplicar todo el audio en memoria
-function computeEnvelope(buffer, fmt, dataOffset, dataLength, windowMs) {
+// Calcula el "envolvente" de amplitud (RMS por ventana de 50ms) leyendo el archivo del
+// disco a trozos de ~64 MB, en vez de necesitar el WAV entero cargado en memoria de golpe
+// — así funciona igual de bien con una sesión de 10 minutos que con una de 3 horas.
+async function computeEnvelope(file, fmt, dataOffset, dataLength, windowMs, onProgress) {
   const { sampleRate, numChannels, bitsPerSample, audioFormat } = fmt;
   const bytesPerSample = bitsPerSample / 8;
   const frameSize = bytesPerSample * numChannels;
@@ -680,9 +695,8 @@ function computeEnvelope(buffer, fmt, dataOffset, dataLength, windowMs) {
   const windowFrames = Math.max(1, Math.round(sampleRate * windowMs / 1000));
   const numWindows = Math.max(1, Math.ceil(totalFrames / windowFrames));
   const envelope = new Float32Array(numWindows);
-  const view = new DataView(buffer);
 
-  function readSample(byteOffset) {
+  function readSample(view, byteOffset) {
     if (audioFormat === 3) return view.getFloat32(byteOffset, true);
     if (bitsPerSample === 16) return view.getInt16(byteOffset, true) / 32768;
     if (bitsPerSample === 24) {
@@ -696,23 +710,48 @@ function computeEnvelope(buffer, fmt, dataOffset, dataLength, windowMs) {
     return 0;
   }
 
-  for (let w = 0; w < numWindows; w++) {
-    const startFrame = w * windowFrames;
-    const endFrame = Math.min(totalFrames, startFrame + windowFrames);
-    const step = Math.max(1, Math.floor((endFrame - startFrame) / 200)); // muestreo, no cada sample
-    let sumSq = 0, count = 0;
-    for (let f = startFrame; f < endFrame; f += step) {
-      const byteOffset = dataOffset + f * frameSize;
-      let val = 0;
-      for (let ch = 0; ch < numChannels; ch++) val += readSample(byteOffset + ch * bytesPerSample);
-      val /= numChannels;
-      sumSq += val * val;
-      count++;
+  // El tamaño de trozo se ajusta para ser SIEMPRE un múltiplo exacto de una ventana, así
+  // ninguna ventana queda partida entre dos trozos leídos por separado.
+  const CHUNK_BYTES_TARGET = 64 * 1024 * 1024;
+  const windowBytes = windowFrames * frameSize;
+  const windowsPerChunk = Math.max(1, Math.floor(CHUNK_BYTES_TARGET / windowBytes));
+  const framesPerChunk = windowsPerChunk * windowFrames;
+
+  let frameCursor = 0;
+  let windowIndex = 0;
+  let lastPct = -10;
+  while (frameCursor < totalFrames) {
+    const framesThisChunk = Math.min(framesPerChunk, totalFrames - frameCursor);
+    const byteStart = dataOffset + frameCursor * frameSize;
+    const byteEnd = byteStart + framesThisChunk * frameSize;
+    const chunkBuf = await file.slice(byteStart, byteEnd).arrayBuffer();
+    const view = new DataView(chunkBuf);
+
+    let localFrame = 0;
+    while (localFrame < framesThisChunk) {
+      const wFrames = Math.min(windowFrames, framesThisChunk - localFrame);
+      const step = Math.max(1, Math.floor(wFrames / 200)); // muestreo, no cada sample
+      let sumSq = 0, count = 0;
+      for (let f = 0; f < wFrames; f += step) {
+        const byteOffset = (localFrame + f) * frameSize;
+        let val = 0;
+        for (let ch = 0; ch < numChannels; ch++) val += readSample(view, byteOffset + ch * bytesPerSample);
+        val /= numChannels;
+        sumSq += val * val;
+        count++;
+      }
+      envelope[windowIndex] = count ? Math.sqrt(sumSq / count) : 0;
+      windowIndex++;
+      localFrame += wFrames;
     }
-    envelope[w] = count ? Math.sqrt(sumSq / count) : 0;
+    frameCursor += framesThisChunk;
+
+    const pct = Math.floor((frameCursor / totalFrames) * 100);
+    if (onProgress && pct >= lastPct + 10) { onProgress(pct); lastPct = pct; }
   }
   return { envelope, windowMs };
 }
+
 
 // Calcula un umbral de silencio a medida de esta grabación en concreto, en vez de
 // usar siempre el mismo valor fijo: mira cuál es el "suelo de ruido" real (percentil
@@ -1424,7 +1463,10 @@ function rescueLongSegment(seg, envelope, windowMs, minTrackSec, maxTrackSec, no
   return final;
 }
 
-function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec) {
+// Igual que antes, pero lee del archivo directamente (file.slice) en vez de recortar de
+// un buffer con el WAV entero ya en memoria — cada trozo cortado es pequeño (un tema
+// suelto), así que esto es rápido y ligero aunque la sesión grabada sea enorme.
+async function extractWavSegment(file, fmt, dataOffset, dataLength, startSec, endSec) {
   const { sampleRate, numChannels, bitsPerSample } = fmt;
   const frameSize = (bitsPerSample / 8) * numChannels;
   const totalFrames = Math.floor(dataLength / frameSize);
@@ -1432,6 +1474,9 @@ function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec
   let endFrame = Math.min(totalFrames, Math.ceil(endSec * sampleRate));
   if (endFrame <= startFrame) endFrame = Math.min(totalFrames, startFrame + 1);
   const dataBytes = (endFrame - startFrame) * frameSize;
+  const byteStart = dataOffset + startFrame * frameSize;
+
+  const audioBuf = await file.slice(byteStart, byteStart + dataBytes).arrayBuffer();
 
   const headerSize = 44;
   const out = new ArrayBuffer(headerSize + dataBytes);
@@ -1450,31 +1495,48 @@ function extractWavSegment(buffer, fmt, dataOffset, dataLength, startSec, endSec
   view.setUint16(34, bitsPerSample, true);
   writeWavStr(view, 36, 'data');
   view.setUint32(40, dataBytes, true);
-  new Uint8Array(out, headerSize).set(new Uint8Array(buffer, dataOffset + startFrame * frameSize, dataBytes));
+  new Uint8Array(out, headerSize).set(new Uint8Array(audioBuf));
   return out;
 }
 
-// Reproduce, tal cual, el trozo de audio que se detectó entre startSec y endSec del WAV
-// grande — sin tocar ni guardar nada. Reutiliza extractWavSegment (la misma función que
-// usa el corte de verdad) para sacar solo esos bytes, y lo pone en un <audio> normal.
+// Reproduce, tal cual, un rango de audio del WAV grande — sin tocar ni guardar nada.
+// Reutiliza extractWavSegment (la misma función que usa el corte de verdad) para sacar
+// solo esos bytes, y lo pone en un <audio> normal. La usan tanto la asociación manual
+// como la vista previa normal, cada una pasándole de dónde saca el archivo.
+async function playWavRange(file, fmt, dataOffset, dataLength, startSec, endSec) {
+  if (cortadorPreviewAudio) {
+    cortadorPreviewAudio.pause();
+    if (cortadorPreviewAudioUrl) URL.revokeObjectURL(cortadorPreviewAudioUrl);
+  }
+  const segBuf = await extractWavSegment(file, fmt, dataOffset, dataLength, startSec, endSec);
+  const url = URL.createObjectURL(new Blob([segBuf], { type: 'audio/wav' }));
+  cortadorPreviewAudioUrl = url;
+  cortadorPreviewAudio = new Audio(url);
+  cortadorPreviewAudio.play();
+  cortadorPreviewAudio.onended = () => { URL.revokeObjectURL(url); if (cortadorPreviewAudioUrl === url) cortadorPreviewAudioUrl = null; };
+}
+
 function playCortadorSegment(startSec, endSec) {
   const d = cortadorAssocData;
   if (!d) return;
-  try {
-    if (cortadorPreviewAudio) {
-      cortadorPreviewAudio.pause();
-      if (cortadorPreviewAudioUrl) URL.revokeObjectURL(cortadorPreviewAudioUrl);
-    }
-    const segBuf = extractWavSegment(d.buffer, d.fmt, d.dataOffset, d.dataLength, startSec, endSec);
-    const url = URL.createObjectURL(new Blob([segBuf], { type: 'audio/wav' }));
-    cortadorPreviewAudioUrl = url;
-    cortadorPreviewAudio = new Audio(url);
-    cortadorPreviewAudio.play();
-    cortadorPreviewAudio.onended = () => { URL.revokeObjectURL(url); if (cortadorPreviewAudioUrl === url) cortadorPreviewAudioUrl = null; };
-  } catch(e) {
+  playWavRange(d.file, d.fmt, d.dataOffset, d.dataLength, startSec, endSec).catch(e => {
     console.error(e);
     showToast('⚠ No se pudo reproducir ese trozo', true);
-  }
+  });
+}
+
+// Igual que playCortadorSegment, pero para un tema de la vista previa normal (ya casado
+// con Discogs) — lee siempre el tiempo ACTUAL del trozo, así que si lo acabas de editar a
+// mano, escucha exactamente lo que has escrito, no lo que se detectó al principio.
+function playCortadorPreviewSegment(i) {
+  const d = cortadorPreviewData;
+  if (!d) return;
+  const s = d.finalSegments[i];
+  if (!s) return;
+  playWavRange(d.file, d.fmt, d.dataOffset, d.dataLength, s.startTrimmed, s.endWithPad).catch(e => {
+    console.error(e);
+    showToast('⚠ No se pudo reproducir ese trozo', true);
+  });
 }
 
 function stopCortadorPreview() {
@@ -1549,45 +1611,22 @@ function buildTimelineHtml(totalDurationSec, segs) {
   </div>`;
 }
 
-// El archivo grande a veces no se puede leer al primer intento — típicamente porque el
-// Lee el archivo a trozos (256 MB cada vez) en vez de de un tirón con file.arrayBuffer().
-// Con WAV grandes de verdad (sesiones de 2h+ pueden ser 1,5-3 GB), pedirlo todo de golpe
-// es precisamente lo que dispara el error de "permission problems" de Chrome — a trozos
-// es más fiable, y de paso deja ver el progreso mientras lee.
-async function readFileInChunks(file, chunkBytes = 256 * 1024 * 1024) {
-  const total = file.size;
-  const out = new Uint8Array(total);
-  let offset = 0;
-  let ultimoPorcentajeMostrado = -1;
-  while (offset < total) {
-    const end = Math.min(total, offset + chunkBytes);
-    const chunkBuf = await file.slice(offset, end).arrayBuffer();
-    out.set(new Uint8Array(chunkBuf), offset);
-    offset = end;
-    const porcentaje = Math.floor((offset / total) * 100);
-    if (porcentaje >= ultimoPorcentajeMostrado + 10 || offset === total) {
-      cortadorLogLine(`  Leyendo... ${porcentaje}% (${(offset / 1024 / 1024).toFixed(0)} / ${(total / 1024 / 1024).toFixed(0)} MB)`);
-      ultimoPorcentajeMostrado = porcentaje;
-    }
-  }
-  return out.buffer;
-}
-
-// programa de grabación (o el antivirus, o un disco externo lento) todavía lo tiene
-// tocado en ese instante, o porque está en una carpeta de OneDrive/SharePoint y Windows
-// todavía no lo ha bajado del todo (archivo "solo en la nube"). En vez de rendirse a la
-// primera, esperamos y reintentamos varias veces, dando más margen cada vez.
-async function readCortadorFileWithRetry(intentos = 6) {
+// Confirma que el archivo es accesible ahora mismo, leyendo solo un trocito pequeño (no
+// hace falta cargarlo entero para comprobarlo). Si falla, espera y reintenta con más
+// margen cada vez — típicamente porque el programa de grabación, un antivirus, o
+// OneDrive/SharePoint todavía lo tienen "tocado" en ese instante.
+async function getCortadorFileWithRetry(intentos = 6) {
   let ultimoError;
   for (let i = 0; i < intentos; i++) {
     try {
       const file = await cortadorFileHandle.getFile();
-      return await readFileInChunks(file);
+      await file.slice(0, Math.min(4096, file.size)).arrayBuffer(); // solo para comprobar acceso
+      return file;
     } catch(e) {
       ultimoError = e;
       if (i < intentos - 1) {
         const espera = Math.min(10, (i + 1) * 2); // 2, 4, 6, 8, 10s
-        cortadorLogLine(`⚠ No se pudo leer el archivo todavía (intento ${i + 1}/${intentos}). Reintentando en ${espera}s...`);
+        cortadorLogLine(`⚠ No se pudo acceder al archivo todavía (intento ${i + 1}/${intentos}). Reintentando en ${espera}s...`);
         await new Promise(r => setTimeout(r, espera * 1000));
       }
     }
@@ -1600,6 +1639,9 @@ function explicarErrorCortador(e) {
   const msg = e && e.message ? e.message : String(e);
   if (/permission problems/i.test(msg)) {
     return 'No se pudo leer el archivo después de varios intentos. Las causas más probables: (1) el programa de grabación aún no lo ha soltado del todo, (2) está en una carpeta de OneDrive/SharePoint y Windows todavía no lo ha bajado del todo a tu disco (mira si el icono de la nube en el explorador de archivos sigue con la flecha de sincronización), o (3) un antivirus lo está escaneando por ser un archivo grande. Espera un poco más y vuelve a elegir el archivo con "Elegir archivo WAV".';
+  }
+  if (/array buffer allocation failed/i.test(msg)) {
+    return 'El archivo es demasiado grande para procesarlo de una sentada en este navegador. Si la sesión dura varias horas, prueba a dividirla en dos trozos más cortos (por ejemplo en Audition) y corta cada uno por separado.';
   }
   return msg;
 }
@@ -1616,16 +1658,17 @@ async function analyzeCortadorRaw() {
   const trimStartSec = cortadorSettings.trimStartSec;
   const padEndSec = cortadorSettings.padEndSec;
 
-  cortadorLogLine('Leyendo el archivo...');
-  const buffer = await readCortadorFileWithRetry();
+  cortadorLogLine('Accediendo al archivo...');
+  const file = await getCortadorFileWithRetry();
 
-  cortadorLogLine('Analizando el WAV...');
-  const { fmt, dataOffset, dataLength } = parseWavHeader(buffer);
+  cortadorLogLine('Leyendo la cabecera del WAV...');
+  const headerSlice = await file.slice(0, Math.min(1024 * 1024, file.size)).arrayBuffer();
+  const { fmt, dataOffset, dataLength } = parseWavHeader(headerSlice, file.size);
   const frameSize = (fmt.bitsPerSample / 8) * fmt.numChannels;
   const totalDurationSec = dataLength / frameSize / fmt.sampleRate;
 
-  cortadorLogLine('Detectando silencios entre temas...');
-  const { envelope, windowMs } = computeEnvelope(buffer, fmt, dataOffset, dataLength, 50);
+  cortadorLogLine('Detectando silencios entre temas (leyendo el audio a trozos, sin cargarlo entero)...');
+  const { envelope, windowMs } = await computeEnvelope(file, fmt, dataOffset, dataLength, 50, (pct) => cortadorLogLine(`  Analizando audio... ${pct}%`));
   let thresholdInfo;
   if (isAuto) {
     thresholdInfo = computeAdaptiveThresholdPerChunk(envelope, windowMs, 4, 5);
@@ -1694,7 +1737,7 @@ async function analyzeCortadorRaw() {
     }
   }
 
-  return { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, rawDetectedSegments, expectedTracksPre, trimStartSec, padEndSec };
+  return { file, fmt, dataOffset, dataLength, totalDurationSec, segments, rawDetectedSegments, expectedTracksPre, trimStartSec, padEndSec };
 }
 
 function buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec) {
@@ -1721,7 +1764,7 @@ function buildTrackFileName(expTrack, fallbackIndex) {
 async function analyzeCortador() {
   const raw = await analyzeCortadorRaw();
   if (!raw) return null;
-  let { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, rawDetectedSegments, expectedTracksPre, trimStartSec, padEndSec } = raw;
+  let { file, fmt, dataOffset, dataLength, totalDurationSec, segments, rawDetectedSegments, expectedTracksPre, trimStartSec, padEndSec } = raw;
 
   // Si el número de trozos detectados no coincide con el número real de temas de
   // Discogs, reconciliarlo (fusionando y/o descartando) para encajar con las duraciones reales.
@@ -1776,7 +1819,7 @@ async function analyzeCortador() {
     return { startSec: rs.startSec, endSec: rs.endSec, kept, label };
   });
 
-  return { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks, totalDurationSec, timelineSegs };
+  return { file, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks, totalDurationSec, timelineSegs };
 }
 
 async function previewCortador() {
@@ -1786,16 +1829,14 @@ async function previewCortador() {
   cortadorRunning = true;
   cortadorLog = [];
   cortadorTimelineData = null;
+  cortadorPreviewData = null;
   renderCortador();
   try {
     const result = await analyzeCortador();
     if (result) {
-      cortadorLogLine(`👁 Vista previa — ${result.finalSegments.length} temas (nada se ha guardado):`);
-      result.finalSegments.forEach((s, i) => {
-        cortadorLogLine(`  ${i + 1}. detectado en ${s.detectedAt.toFixed(2)}s → ${fmtDuration(s.startTrimmed)} a ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
-      });
-      cortadorLogLine('Si te vale, pulsa "Cortar y guardar". Si no, ajusta los parámetros y vuelve a previsualizar.');
+      cortadorLogLine(`👁 Vista previa — ${result.finalSegments.length} temas (nada se ha guardado). Puedes ajustar los tiempos de cada uno arriba y escucharlos con ▶ antes de guardar.`);
       cortadorTimelineData = { totalDurationSec: result.totalDurationSec, segs: result.timelineSegs };
+      cortadorPreviewData = result;
     }
   } catch(e) {
     console.error(e);
@@ -1809,6 +1850,7 @@ async function startCortadorAssociation() {
   if (!cortadorFileHandle || cortadorRunning) return;
   cortadorRunning = true;
   cortadorLog = [];
+  cortadorPreviewData = null; // se entra en modo manual: la vista previa normal ya no aplica
   renderCortador();
   try {
     const raw = await analyzeCortadorRaw();
@@ -1849,6 +1891,23 @@ function setCortadorSegmentTime(idx, campo, valor) {
   renderCortador();
 }
 
+// Igual que setCortadorSegmentTime, pero para un tema ya casado con Discogs en la vista
+// previa normal — lo que quede aquí es exactamente lo que se guardará al darle a "Cortar
+// y guardar" (no se vuelve a analizar desde cero, se usa este dato tal cual lo dejes).
+function setCortadorPreviewSegmentTime(i, campo, valor) {
+  const d = cortadorPreviewData;
+  if (!d) return;
+  const s = d.finalSegments[i];
+  if (!s) return;
+  const v = parseTimecode(valor);
+  if (v == null || v < 0) { showToast('⚠ No entiendo ese tiempo — usa m:ss o h:mm:ss', true); renderCortador(); return; }
+  if (v > d.totalDurationSec) { showToast('⚠ Eso está fuera de la duración del WAV', true); renderCortador(); return; }
+  if (campo === 'startTrimmed' && v >= s.endWithPad) { showToast('⚠ El inicio no puede ser después (o igual) que el final', true); renderCortador(); return; }
+  if (campo === 'endWithPad' && v <= s.startTrimmed) { showToast('⚠ El final no puede ser antes (o igual) que el inicio', true); renderCortador(); return; }
+  s[campo] = v;
+  renderCortador();
+}
+
 function cancelCortadorAssociation() {
   stopCortadorPreview();
   cortadorAssocActive = false;
@@ -1862,7 +1921,7 @@ async function confirmCortadorAssociation() {
   cortadorRunning = true;
   renderCortador();
   try {
-    const { buffer, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments } = cortadorAssocData;
+    const { file, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments } = cortadorAssocData;
 
     // Agrupar los trozos en bruto según lo que el usuario ha asociado a mano
     const groups = {};
@@ -1896,7 +1955,7 @@ async function confirmCortadorAssociation() {
     const usedNames = new Set();
     for (let i = 0; i < finalSegments.length; i++) {
       const s = finalSegments[i];
-      let wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
+      let wavBuffer = await extractWavSegment(file, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
       let baseName = String(i + 1);
       try {
         wavBuffer = await embedTagsInWav(wavBuffer, matchedTracksInOrder[i]);
@@ -1931,51 +1990,63 @@ async function runCortador() {
   if (wantManual) { await startCortadorAssociation(); return; }
   cortadorRunning = true;
   cortadorLog = [];
-  cortadorTimelineData = null;
   renderCortador();
   try {
-    const result = await analyzeCortador();
-    if (!result) { cortadorRunning = false; renderCortador(); return; }
-    const { buffer, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks } = result;
+    let result = cortadorPreviewData;
+    if (result) {
+      cortadorLogLine('Usando el corte que ya has revisado en la vista previa (con tus ajustes a mano, si hiciste alguno)...');
+    } else {
+      result = await analyzeCortador();
+      if (!result) { cortadorRunning = false; renderCortador(); return; }
+    }
     cortadorTimelineData = { totalDurationSec: result.totalDurationSec, segs: result.timelineSegs };
-
-    if (matchedExpectedTracks) {
-      cortadorLogLine('🏷 Se incrustarán título, artista, álbum, pista, año, género, sello, referencia de catálogo (en catálogo y compositor) y carátula (coincide el número de temas con Discogs).');
-    }
-
-    cortadorLogLine(`Detectados ${finalSegments.length} temas. Guardando...`);
-    const usedNames = new Set();
-    for (let i = 0; i < finalSegments.length; i++) {
-      const s = finalSegments[i];
-      let wavBuffer = extractWavSegment(buffer, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
-      let baseName = String(i + 1);
-      if (matchedExpectedTracks) {
-        try {
-          wavBuffer = await embedTagsInWav(wavBuffer, matchedExpectedTracks[i]);
-        } catch(e) {
-          console.error('Error incrustando etiquetas:', e);
-        }
-        const pos = buildTrackFileName(matchedExpectedTracks[i], i);
-        if (pos) baseName = pos;
-      }
-      if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1); // por si dos posiciones salen iguales
-      usedNames.add(baseName);
-      const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
-      const writable = await outHandle.createWritable();
-      await writable.write(wavBuffer);
-      await writable.close();
-      cortadorLogLine(`✓ ${baseName}.wav — detectado en ${s.detectedAt.toFixed(2)}s, recortado a ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
-    }
-    cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
-    showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
+    await saveCortadorFinalSegments(result);
     abrirAyudanteCaratulas();
   } catch(e) {
     console.error(e);
     cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
     showToast('⚠ Error al procesar el WAV', true);
   }
+  cortadorPreviewData = null; // ya se ha usado — que la próxima vista previa sea nueva
   cortadorRunning = false;
   renderCortador();
+}
+
+// El bucle de guardado de verdad — lo comparten runCortador() (recién analizado o
+// reutilizando la vista previa) y, si hiciera falta en el futuro, cualquier otro sitio
+// que ya tenga un resultado de analyzeCortador() listo para escribir a disco.
+async function saveCortadorFinalSegments(result) {
+  const { file, fmt, dataOffset, dataLength, finalSegments, matchedExpectedTracks } = result;
+
+  if (matchedExpectedTracks) {
+    cortadorLogLine('🏷 Se incrustarán título, artista, álbum, pista, año, género, sello, referencia de catálogo (en catálogo y compositor) y carátula (coincide el número de temas con Discogs).');
+  }
+
+  cortadorLogLine(`Detectados ${finalSegments.length} temas. Guardando...`);
+  const usedNames = new Set();
+  for (let i = 0; i < finalSegments.length; i++) {
+    const s = finalSegments[i];
+    let wavBuffer = await extractWavSegment(file, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
+    let baseName = String(i + 1);
+    if (matchedExpectedTracks) {
+      try {
+        wavBuffer = await embedTagsInWav(wavBuffer, matchedExpectedTracks[i]);
+      } catch(e) {
+        console.error('Error incrustando etiquetas:', e);
+      }
+      const pos = buildTrackFileName(matchedExpectedTracks[i], i);
+      if (pos) baseName = pos;
+    }
+    if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1); // por si dos posiciones salen iguales
+    usedNames.add(baseName);
+    const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
+    const writable = await outHandle.createWritable();
+    await writable.write(wavBuffer);
+    await writable.close();
+    cortadorLogLine(`✓ ${baseName}.wav — ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
+  }
+  cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
+  showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
 }
 
 function sanitizeFolderName(name) {
@@ -3333,6 +3404,38 @@ function renderBuscador() {
 }
 
 // ─── VISTA DEL CORTADOR DE RIPS ─────────────────────────────────────────────────
+// Bloque de revisión de la última vista previa normal (no manual): arriba del todo de la
+// pantalla, para no tener que bajar con el ratón a buscarlo. Cada tema se puede escuchar
+// y su tiempo de inicio/fin se puede tocar a mano — lo que quede aquí es lo que se guarda.
+function renderCortadorPreviewReview() {
+  const d = cortadorPreviewData;
+  if (!d) return '';
+  return `
+    <div class="config-section" style="border:2px solid var(--accent);background:var(--bg2)">
+      <h3>👁 Vista previa — ${d.finalSegments.length} tema(s) (nada guardado todavía)</h3>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Ajusta el tiempo de cualquier corte si hace falta y escúchalo con ▶. Cuando esté bien, dale a "Cortar y guardar" — se usa esto tal cual, sin volver a analizar.</p>
+      ${buildTimelineHtml(d.totalDurationSec, d.timelineSegs)}
+      <div class="tracklist" style="margin-top:10px">
+        ${d.finalSegments.map((s, i) => {
+          const track = d.matchedExpectedTracks ? d.matchedExpectedTracks[i] : null;
+          const dur = s.endWithPad - s.startTrimmed;
+          return `<div class="track-row" style="align-items:center;flex-wrap:wrap">
+            <button class="btn" style="font-size:12px;padding:4px 9px" onclick="playCortadorPreviewSegment(${i})" title="Escuchar este trozo tal cual está ahora mismo">▶</button>
+            <span class="track-pos" style="min-width:20px">${i + 1}</span>
+            ${track ? `<span style="font-size:12px;flex:1;min-width:110px;white-space:normal">${track.title}</span>` : `<span style="flex:1"></span>`}
+            <span style="display:flex;align-items:center;gap:3px;font-size:11px;color:var(--text3)">
+              <input type="text" inputmode="numeric" value="${fmtTimecode(s.startTrimmed)}" title="Inicio — m:ss o h:mm:ss" style="width:78px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;font-family:monospace" onchange="setCortadorPreviewSegmentTime(${i}, 'startTrimmed', this.value)">
+              →
+              <input type="text" inputmode="numeric" value="${fmtTimecode(s.endWithPad)}" title="Fin — m:ss o h:mm:ss" style="width:78px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;font-family:monospace" onchange="setCortadorPreviewSegmentTime(${i}, 'endWithPad', this.value)">
+              <span style="white-space:nowrap">(${fmtDuration(dur)})</span>
+            </span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderCortador() {
   if (cortadorAssocActive) { renderCortadorAssocEditor(); return; }
   const main = document.getElementById('main-content');
@@ -3367,6 +3470,8 @@ function renderCortador() {
         y te guardo cada uno como 1.wav, 2.wav, 3.wav... cortado justo donde empieza y 1 segundo después de acabar.
         El original no se toca.
       </p>
+
+      ${renderCortadorPreviewReview()}
 
       <div class="config-section">
         <h3>1. Archivo WAV grabado</h3>
@@ -3469,7 +3574,7 @@ function renderCortador() {
       </a>
       <p style="font-size:11px;color:var(--text3);margin-top:6px">Esto abre el programa "Poner Carátulas" que tengas instalado en tu PC — hace falta haberlo ejecutado una vez para que se registre. Si no lo tienes, no pasa nada: el navegador simplemente no sabrá qué abrir.</p>
 
-      ${cortadorTimelineData ? buildTimelineHtml(cortadorTimelineData.totalDurationSec, cortadorTimelineData.segs) : ''}
+      ${(!cortadorPreviewData && cortadorTimelineData) ? buildTimelineHtml(cortadorTimelineData.totalDurationSec, cortadorTimelineData.segs) : ''}
 
       ${cortadorLog.length ? `
       <div style="margin-top:16px;padding:10px;background:var(--bg2);border-radius:6px;font-size:11px;font-family:monospace;color:var(--text2);max-height:300px;overflow-y:auto">
@@ -3657,13 +3762,17 @@ async function addCortadorSessionDisc(idx) {
   if (!releaseId) { showToast('⚠ Este disco no tiene release_id de Discogs', true); return; }
   cortadorSessionDiscs.push({ row });
   cortadorDiscSearchQ = '';
+  cortadorPreviewData = null; // ha cambiado la lista de discos: la vista previa ya no vale
   renderCortador();
+  requestAnimationFrame(() => { document.getElementById('cortador-disc-search')?.focus(); }); // que puedas seguir escribiendo el siguiente sin volver a hacer clic
   await loadCoverForRow(row); // esto ya trae y cachea el tracklist con duraciones
   renderCortador();
+  requestAnimationFrame(() => { document.getElementById('cortador-disc-search')?.focus(); });
 }
 
 function removeCortadorSessionDisc(i) {
   cortadorSessionDiscs.splice(i, 1);
+  cortadorPreviewData = null;
   renderCortador();
 }
 
@@ -3750,12 +3859,14 @@ async function addCortadorManualDisc() {
   if (!name) { showToast('⚠ Escribe un nombre para el disco', true); return; }
   if (!count || count < 1) { showToast('⚠ Indica cuántos temas tiene', true); return; }
   cortadorSessionDiscs.push({ manual: true, title: name, trackCount: count });
+  cortadorPreviewData = null;
   renderCortador();
 }
 
 function setCortadorCountOverride(i, value) {
   const n = parseInt(value, 10);
   cortadorSessionDiscs[i].countOverride = n > 0 ? n : null;
+  cortadorPreviewData = null;
   renderCortador();
 }
 
@@ -3763,6 +3874,7 @@ function onCortadorAutoToggle() {
   const auto = document.getElementById('cortador-auto')?.checked;
   const th = document.getElementById('cortador-threshold');
   if (th) th.disabled = auto;
+  cortadorPreviewData = null;
   readCortadorFormIntoSettings();
 }
 
@@ -3773,6 +3885,7 @@ function onCortadorFieldChange() {
   const mg = document.getElementById('cortador-mingap');
   const mgVal = document.getElementById('cortador-mingap-val');
   if (mg && mgVal) mgVal.textContent = mg.value + ' s';
+  cortadorPreviewData = null;
   readCortadorFormIntoSettings();
 }
 
