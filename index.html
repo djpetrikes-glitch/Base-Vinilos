@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.92 — Dj Petrik</title>
+<title>VinylBase v2.94 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.92</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.94</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1789,6 +1789,23 @@ async function confirmCortadorAssociation() {
   cortadorRunning = true;
   renderCortador();
   try {
+    // Comprobar el permiso de escritura AQUÍ MISMO, nada más pulsar el botón — es el
+    // momento en que de verdad tenemos un gesto tuyo reciente. Si se ha perdido (pasa en
+    // análisis largos, de varios minutos), lo volvemos a pedir antes de tocar nada, en vez
+    // de descubrirlo a mitad del guardado con un error críptico.
+    let permiso = await cortadorOutDirHandle.queryPermission({ mode: 'readwrite' });
+    if (permiso !== 'granted') {
+      cortadorLogLine('El permiso de la carpeta de salida se había perdido — pidiéndolo de nuevo...');
+      permiso = await cortadorOutDirHandle.requestPermission({ mode: 'readwrite' });
+    }
+    if (permiso !== 'granted') {
+      cortadorLogLine('⚠ No se concedió permiso de escritura sobre la carpeta de salida. Usa "Cambiar carpeta" (paso 2) y vuelve a intentarlo.');
+      showToast('⚠ Sin permiso de escritura — vuelve a elegir la carpeta de salida', true);
+      cortadorRunning = false;
+      renderCortador();
+      return;
+    }
+
     const { file, fmt, dataOffset, dataLength, totalDurationSec, segments, expectedTracksPre, trimStartSec, padEndSec, assignments } = cortadorAssocData;
 
     // Agrupar los trozos en bruto según lo que el usuario ha asociado a mano
@@ -1827,29 +1844,44 @@ async function confirmCortadorAssociation() {
 
     cortadorLogLine(`Guardando ${finalSegments.length} temas según tu asociación${validatedEntries.length ? ` (${validatedEntries.length} ya estaban validados de antes)` : ''}...`);
     const usedNames = new Set();
+    let fallos = 0;
     for (let i = 0; i < finalSegments.length; i++) {
       const s = finalSegments[i];
-      let wavBuffer = await extractWavSegment(file, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
       let baseName = String(i + 1);
       try {
-        wavBuffer = await embedTagsInWav(wavBuffer, matchedTracksInOrder[i]);
-      } catch(e) { console.error('Error incrustando etiquetas:', e); }
-      const pos = buildTrackFileName(matchedTracksInOrder[i], i);
-      if (pos) baseName = pos;
-      if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1);
-      usedNames.add(baseName);
-      const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
-      const writable = await outHandle.createWritable();
-      await writable.write(wavBuffer);
-      await writable.close();
-      cortadorLogLine(`✓ ${baseName}.wav — ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
+        let wavBuffer = await extractWavSegment(file, fmt, dataOffset, dataLength, s.startTrimmed, s.endWithPad);
+        try {
+          wavBuffer = await embedTagsInWav(wavBuffer, matchedTracksInOrder[i]);
+        } catch(e) { console.error('Error incrustando etiquetas:', e); }
+        const pos = buildTrackFileName(matchedTracksInOrder[i], i);
+        if (pos) baseName = pos;
+        if (usedNames.has(baseName)) baseName = baseName + '_' + (i + 1);
+        usedNames.add(baseName);
+        const outHandle = await cortadorOutDirHandle.getFileHandle(baseName + '.wav', { create: true });
+        const writable = await outHandle.createWritable();
+        await writable.write(wavBuffer);
+        await writable.close();
+        cortadorLogLine(`✓ ${baseName}.wav — ${fmtDuration(s.startTrimmed)} → ${fmtDuration(s.endWithPad)} (${fmtDuration(s.endWithPad - s.startTrimmed)})`);
+      } catch(e) {
+        // Un fallo en UN tema no debe tirar los otros 20 — se sigue con el resto, y al
+        // final queda claro cuáles hay que repetir (puedes volver a darle a Confirmar,
+        // los que ya se guardaron bien simplemente se sobrescriben igual).
+        fallos++;
+        console.error(e);
+        cortadorLogLine(`⚠ ${baseName}.wav — no se pudo guardar: ${explicarErrorCortador(e)}`);
+      }
     }
-    cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
-    showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
-    cortadorAssocActive = false;
-    cortadorAssocData = null;
-    cortadorValidatedTracks = {};
-    abrirAyudanteCaratulas();
+    if (fallos) {
+      cortadorLogLine(`⚠ ${fallos} de ${finalSegments.length} no se pudieron guardar. Puedes darle otra vez a "Confirmar asociación y guardar" para reintentar solo eso — lo que ya se guardó bien no se duplica, se sobrescribe igual.`);
+      showToast(`⚠ ${fallos} tema(s) no se guardaron — revisa el registro`, true);
+    } else {
+      cortadorLogLine(`✓ Listo. ${finalSegments.length} archivos guardados en "${cortadorOutDirHandle.name}".`);
+      showToast(`✓ ${finalSegments.length} temas cortados y guardados`);
+      cortadorAssocActive = false;
+      cortadorAssocData = null;
+      cortadorValidatedTracks = {};
+      abrirAyudanteCaratulas();
+    }
   } catch(e) {
     console.error(e);
     cortadorLogLine('⚠ Error: ' + explicarErrorCortador(e));
@@ -3487,6 +3519,23 @@ function renderCortadorAssocEditor() {
       <div class="tracklist" style="margin-bottom:14px">
         ${segments.map((seg, i) => {
           const dur = seg.endSec - seg.startSec;
+          const a = assignments[i];
+          let sumBadge = '';
+          if (a != null && a >= 0) {
+            // Índices de todos los trozos fusionados en este mismo destino, en orden
+            const groupIdx = assignments.map((av, ii) => av === a ? ii : -1).filter(ii => ii >= 0);
+            if (groupIdx.length > 1 && i === groupIdx[groupIdx.length - 1]) {
+              // Este es el ÚLTIMO trozo del grupo: mostrar la suma de los tiempos fusionados
+              const sumSec = groupIdx.reduce((s, ii) => s + (segments[ii].endSec - segments[ii].startSec), 0);
+              const track = expected[a];
+              let color = 'var(--text3)';
+              if (track && track.durationSec != null) {
+                const diffPct = Math.abs(sumSec - track.durationSec) / track.durationSec;
+                color = diffPct > 0.1 ? '#e05252' : '#4caf6d';
+              }
+              sumBadge = ` <span style="color:${color};font-weight:600;white-space:nowrap" title="Suma de los ${groupIdx.length} trozos fusionados en este tema${track && track.durationSec != null ? ' — Discogs dice ' + fmtDuration(track.durationSec) : ''}">Σ ${fmtDuration(sumSec)}</span>`;
+            }
+          }
           return `<div class="track-row" style="align-items:center;flex-wrap:wrap">
             <button class="btn" style="font-size:12px;padding:4px 9px" onclick="playCortadorSegment(${seg.startSec}, ${seg.endSec})" title="Escuchar este trozo tal cual está ahora mismo">▶</button>
             <span class="track-pos" style="min-width:20px">${i+1}</span>
@@ -3494,7 +3543,7 @@ function renderCortadorAssocEditor() {
               <input type="text" inputmode="numeric" value="${fmtTimecode(seg.startSec)}" title="Inicio — m:ss o h:mm:ss" style="width:78px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;font-family:monospace" onchange="setCortadorSegmentTime(${i}, 'startSec', this.value)">
               →
               <input type="text" inputmode="numeric" value="${fmtTimecode(seg.endSec)}" title="Fin — m:ss o h:mm:ss" style="width:78px;padding:2px 4px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;font-family:monospace" onchange="setCortadorSegmentTime(${i}, 'endSec', this.value)">
-              <span style="white-space:nowrap">(${fmtDuration(dur)})</span>
+              <span style="white-space:nowrap">(${fmtDuration(dur)})</span>${sumBadge}
             </span>
             <select onchange="setCortadorAssignment(${i}, this.value)" style="flex:1;min-width:180px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text);font-size:12px">
               <option value="-1" ${assignments[i] === -1 ? 'selected' : ''}>— Descartar (ruido) —</option>
@@ -3507,6 +3556,7 @@ function renderCortadorAssocEditor() {
 
       <div style="display:flex;gap:8px">
         <button class="btn" onclick="cancelCortadorAssociation()">Cancelar</button>
+        <button class="btn" onclick="pickCortadorOutDir()" title="Fuerza reconfirmar el permiso de escritura sobre la carpeta de salida">🔄 Reconectar carpeta</button>
         <button class="btn btn-accent" style="flex:1;justify-content:center" ${cortadorRunning ? 'disabled' : ''} onclick="confirmCortadorAssociation()">
           ${cortadorRunning ? 'Guardando...' : '✓ Confirmar asociación y guardar'}
         </button>
