@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.101 — Dj Petrik</title>
+<title>VinylBase v2.102 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.101</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.102</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -322,6 +322,11 @@
         </div>
       </div>
       <div class="field-g"><label>Notas</label><input id="f-notes" placeholder="Notas opcionales" oninput="updateNewRec('notes',this.value)"></div>
+      <div class="field-g">
+        <label>ID / Release de Discogs (opcional)</label>
+        <input id="f-release-id" placeholder="Pega el ID o la URL de discogs.com/release/1234567..." oninput="updateNewRec('releaseId',this.value)">
+        <div style="font-size:10px;color:var(--text3);margin-top:3px">Es la misma referencia que usa Mp3tag para identificar el disco. Si la pones, la app ya podrá traer la carátula sola y usarlo en el Cortador — igual que si viniera de la búsqueda de arriba.</div>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -4154,6 +4159,7 @@ function openModal() {
   document.getElementById('f-year').value = '';
   document.getElementById('f-label').value = '';
   document.getElementById('f-catalog').value = '';
+  document.getElementById('f-release-id').value = '';
   document.getElementById('discogs-results').style.display = 'none';
 }
 
@@ -4163,8 +4169,18 @@ function closeModal() {
 
 function updateNewRec(field, val) { newRec[field] = val; }
 
+// Acepta lo que sea que pegues: un ID suelto ("1112233"), o la URL completa de la página
+// del disco en Discogs ("https://www.discogs.com/release/1112233-Artista-Titulo") — en
+// los dos casos saca solo el número, que es lo que hace falta guardar.
+function extractDiscogsReleaseId(input) {
+  const s = (input || '').trim();
+  const m = s.match(/(\d{4,})/);
+  return m ? m[1] : '';
+}
+
 async function addRecord() {
   if (!newRec.artist || !newRec.title) { showToast('⚠ Artista y título son obligatorios', true); return; }
+  const releaseIdLimpio = extractDiscogsReleaseId(newRec.releaseId);
   const row = new Array(32).fill('');
   row[COL.catalog] = newRec.catalog;
   row[COL.artist] = newRec.artist;
@@ -4173,7 +4189,7 @@ async function addRecord() {
   row[COL.year] = newRec.year;
   row[COL.genre] = newRec.genre;
   row[COL.format] = '12"';
-  row[COL.fuente] = newRec.releaseId ? 'Discogs' : 'Manual';
+  row[COL.fuente] = releaseIdLimpio ? 'Discogs' : 'Manual';
   row[COL.notes] = newRec.notes;
   row[COL.date_added] = new Date().toLocaleDateString('es-ES');
   row[COL.ripeado] = 'No';
@@ -4181,15 +4197,15 @@ async function addRecord() {
   // más al final (se quita con .slice(0,-1) al usarlo) — sin esto, este disco no podría
   // encontrar su carátula, ni aparecer en el buscador del Cortador, ni aceptar que le
   // arrastres una carátula a mano encima. Es justo lo que te estaba fallando.
-  if (newRec.releaseId) row[COL.release_id] = String(newRec.releaseId) + '0';
+  if (releaseIdLimpio) row[COL.release_id] = releaseIdLimpio + '0';
 
   allData.unshift(row);
   closeModal();
   renderStats();
   renderView();
 
-  if (newRec.releaseId && newRec.thumb) {
-    coverCache[String(newRec.releaseId)] = newRec.thumb;
+  if (releaseIdLimpio && newRec.thumb) {
+    coverCache[releaseIdLimpio] = newRec.thumb;
   }
 
   if (!row[COL.release_id]) {
