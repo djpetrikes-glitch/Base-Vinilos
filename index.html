@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.95 — Dj Petrik</title>
+<title>VinylBase v2.99 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -212,7 +212,7 @@
   .kallax-grid { display: grid; gap: 3px; }
   .kallax-grid-2x4 { grid-template-columns: repeat(4, 1fr); }
   .kallax-grid-4x4 { grid-template-columns: repeat(4, 1fr); }
-  .kc { aspect-ratio: 1; border: 1px solid var(--border); border-radius: 4px; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: var(--text3); cursor: pointer; transition: all .15s; }
+  .kc { aspect-ratio: 1; border: 1px solid var(--border); border-radius: 4px; background: var(--bg3); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: 10px; font-weight: 600; color: var(--text3); cursor: pointer; transition: all .15s; }
   .kc:hover { border-color: var(--accent); color: var(--accent); }
   .kc.on { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
   .kc.empty { background: var(--bg); border-color: var(--border); color: var(--bg); cursor: default; pointer-events: none; }
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.95</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.99</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1069,12 +1069,12 @@ async function embedTagsInWav(wavArrayBuffer, expTrack) {
   const frames = [];
   frames.push(id3TextFrame('TIT2', expTrack.title));
   if (row) {
-    frames.push(id3TextFrame('TPE1', g(row, COL.artist)));
+    frames.push(id3TextFrame('TPE1', stripDiscogsDisambiguation(g(row, COL.artist))));
     frames.push(id3TextFrame('TALB', expTrack.disc));
     frames.push(id3TextFrame('TRCK', expTrack.position));
     if (g(row, COL.year)) frames.push(id3TextFrame('TYER', g(row, COL.year)));
     if (g(row, COL.genre)) frames.push(id3TextFrame('TCON', g(row, COL.genre)));
-    if (g(row, COL.label)) frames.push(id3TextFrame('TPUB', g(row, COL.label)));
+    if (g(row, COL.label)) frames.push(id3TextFrame('TPUB', stripDiscogsDisambiguation(g(row, COL.label))));
     if (g(row, COL.catalog)) frames.push(id3TxxxFrame('CATALOGNUMBER', g(row, COL.catalog)));
     if (g(row, COL.catalog)) frames.push(id3TextFrame('TCOM', g(row, COL.catalog))); // Compositor = referencia de catálogo, a petición
 
@@ -1186,10 +1186,10 @@ async function embedTagsInFlac(flacArrayBuffer, expTrack) {
   ];
   let coverBody = null;
   if (row) {
-    pairs.push(['ARTIST', g(row, COL.artist)]);
+    pairs.push(['ARTIST', stripDiscogsDisambiguation(g(row, COL.artist))]);
     if (g(row, COL.year)) pairs.push(['DATE', g(row, COL.year)]);
     if (g(row, COL.genre)) pairs.push(['GENRE', g(row, COL.genre)]);
-    if (g(row, COL.label)) pairs.push(['LABEL', g(row, COL.label)]);
+    if (g(row, COL.label)) pairs.push(['LABEL', stripDiscogsDisambiguation(g(row, COL.label))]);
     if (g(row, COL.catalog)) {
       pairs.push(['CATALOGNUMBER', g(row, COL.catalog)]);
       pairs.push(['COMPOSER', g(row, COL.catalog)]); // mismo criterio que en el WAV, a petición
@@ -1659,7 +1659,7 @@ function buildFinalSegments(segments, totalDurationSec, trimStartSec, padEndSec)
 // Nombre de archivo "(Artista) - Título" a partir de un tema esperado de Discogs.
 // Si no hay artista disponible, cae en la posición (A1, A2...) o un número.
 function buildTrackFileName(expTrack, fallbackIndex) {
-  const artist = expTrack.row ? g(expTrack.row, COL.artist) : '';
+  const artist = expTrack.row ? stripDiscogsDisambiguation(g(expTrack.row, COL.artist)) : '';
   const title = expTrack.title || '';
   if (artist && title) return sanitizeFolderName(`${artist} - ${title}`);
   if (title) return sanitizeFolderName(title);
@@ -1907,6 +1907,24 @@ function sanitizeFolderName(name) {
     .trim();
 }
 
+// Discogs añade "(2)", "(3)"... al final del nombre de un artista o sello cuando hay otro
+// exactamente igual ya registrado en su base de datos, solo para poder distinguirlos en su
+// web — pero en una carpeta, un nombre de archivo o una etiqueta, ese número de más no
+// aporta nada y solo ensucia el resultado. Solo quita un paréntesis con SOLO dígitos al
+// final (no toca "(Remix)", "(Radio Edit)" ni nada que sí sea parte real del nombre).
+function stripDiscogsDisambiguation(name) {
+  return (name || '').replace(/\s*\(\d+\)\s*$/, '').trim();
+}
+
+// Nombre de carpeta de un disco — lo usan crear carpeta, el buscador de archivos ya
+// ripeados, y "Verificar ripeados", así que los tres tienen que calcularlo IGUAL siempre.
+function buildDiscFolderName(row) {
+  const catalog = g(row, COL.catalog);
+  const artist = stripDiscogsDisambiguation(g(row, COL.artist));
+  const title = g(row, COL.title);
+  return sanitizeFolderName(`(${catalog}) ${artist} - ${title}`);
+}
+
 // Abre el ayudante "Poner Carátulas" de tu PC, igual que si pulsaras el botón — se llama
 // sola en cuanto termina de guardar el último archivo de un corte. Si el ayudante tiene
 // carpeta fija configurada, se pone a trabajar y se cierra solo al acabar, sin más clics.
@@ -1925,10 +1943,7 @@ async function createFolderForRow(idx) {
     return;
   }
   const row = allData[idx];
-  const catalog = g(row, COL.catalog);
-  const artist = g(row, COL.artist);
-  const title = g(row, COL.title);
-  const folderName = sanitizeFolderName(`(${catalog}) ${artist} - ${title}`);
+  const folderName = buildDiscFolderName(row);
 
   const root = await getRootDir();
   if (!root) return;
@@ -1953,6 +1968,83 @@ let auditoriaResults = null; // { totalCarpetas, totalMarcados, faltanCarpeta, f
 function isRowRipped(row) {
   const v = g(row, COL.ripeado).toLowerCase();
   return v === 'si' || v === 'sí';
+}
+
+// ─── RESETEAR TODOS LOS RIPEADOS (botón de un solo uso, para volver a empezar de cero) ──
+const RESET_RIPEADOS_USADO_KEY = 'vinylbase_resetRipeadosUsado';
+
+function renderResetRipeadosSection() {
+  if (localStorage.getItem(RESET_RIPEADOS_USADO_KEY)) return '';
+  const n = allData.filter(isRowRipped).length;
+  return `
+      <div class="config-section" style="border:2px solid #c0392b">
+        <h3 style="color:#c0392b">⚠ Zona peligrosa</h3>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">
+          Pone "ripeado" a No en los ${n} discos que ahora mismo están marcados como ripeados, para
+          volver a empezar de cero (por ejemplo, si has tenido que volver a ripearlo todo por un
+          problema de limpieza). No borra ningún archivo tuyo, solo cambia el estado en el Sheet.
+          Este botón desaparece para siempre en cuanto lo uses una vez — no hay una segunda vez.
+        </p>
+        <button class="btn" style="background:#c0392b;color:white;border-color:#c0392b" ${n === 0 ? 'disabled' : ''} onclick="resetearTodosLosRipeados()">
+          🗑 Resetear los ${n} ripeados (una sola vez)
+        </button>
+      </div>`;
+}
+
+async function resetearTodosLosRipeados() {
+  const targets = allData.map((row, idx) => ({ row, idx })).filter(e => isRowRipped(e.row));
+  if (!targets.length) { showToast('No hay ningún disco marcado como ripeado ahora mismo', true); return; }
+
+  if (!confirm(`¿Seguro que quieres resetear TODOS los ${targets.length} discos marcados como ripeados?\n\nSe ponen a "No" en el Sheet — no se borra ningún archivo. No hay forma de deshacer esto desde aquí, y el botón desaparecerá para siempre después de usarlo.`)) return;
+  if (!confirm(`Última confirmación, sin vuelta atrás: se van a resetear ${targets.length} discos ahora mismo. ¿Seguro del todo?`)) return;
+
+  showToast(`Reseteando ${targets.length} discos — puede tardar un rato, no cierres la pestaña...`);
+  let ok = 0;
+  const fallos = [];
+  for (const { row } of targets) {
+    row[COL.ripeado] = 'No';
+    row[COL.ripeado_por] = '';
+    const fields = [
+      { col: COL.ripeado,        value: 'No' },
+      { col: COL.ripeado_por,    value: '' },
+      { col: COL.digital_estado, value: row[COL.digital_estado] || '' },
+      { col: COL.kallax_slot,    value: row[COL.kallax_slot]    || '' },
+      { col: COL.cantidad,       value: row[COL.cantidad]       || '' },
+      { col: COL.estado_fisico,  value: row[COL.estado_fisico]  || '' },
+      { col: COL.corte_problema, value: row[COL.corte_problema] || '' },
+      { col: COL.formato_rip,    value: row[COL.formato_rip]    || '' },
+      { col: COL.limpio,         value: row[COL.limpio]         || '' },
+      { col: COL.fecha_limpieza, value: row[COL.fecha_limpieza] || '' },
+      { col: COL.format,         value: row[COL.format]         || '' },
+      { col: COL.fuente,         value: row[COL.fuente]         || '' },
+    ];
+    try {
+      await postToSheet(row, fields);
+      await new Promise(r => setTimeout(r, 1200));
+      let confirmado = await verifySaved(row, fields);
+      if (!confirmado) {
+        await postToSheet(row, fields);
+        await new Promise(r => setTimeout(r, 1200));
+        confirmado = await verifySaved(row, fields);
+      }
+      if (confirmado) ok++;
+      else fallos.push(`${g(row, COL.artist)} — ${g(row, COL.title)}`);
+    } catch(e) {
+      console.error(e);
+      fallos.push(`${g(row, COL.artist)} — ${g(row, COL.title)}`);
+    }
+  }
+
+  localStorage.setItem(RESET_RIPEADOS_USADO_KEY, '1');
+  renderStats();
+  if (view === 'config') renderConfig();
+
+  if (fallos.length) {
+    console.warn('Discos que no se pudieron resetear (revísalos a mano en el Sheet):', fallos);
+    showToast(`✓ ${ok} reseteados — ⚠ ${fallos.length} no se pudieron confirmar, revisa la consola`, true);
+  } else {
+    showToast(`✓ Los ${ok} discos se han reseteado correctamente`);
+  }
 }
 
 async function runAuditoriaRipeados() {
@@ -1984,7 +2076,7 @@ async function runAuditoriaRipeados() {
       const title = g(row, COL.title);
       if (!catalog && !artist && !title) continue;
 
-      const expectedName = sanitizeFolderName(`(${catalog}) ${artist} - ${title}`);
+      const expectedName = buildDiscFolderName(row);
       const marcado = isRowRipped(row);
       const tieneCarpeta = folderSet.has(expectedName);
       if (tieneCarpeta) nombresUsados.add(expectedName);
@@ -2354,7 +2446,7 @@ function matchAllTracksInIndex(row, track) {
 
 async function findAudioFileForTrackByName(row, track) {
   const catalog = g(row, COL.catalog);
-  const artist = g(row, COL.artist);
+  const artist = stripDiscogsDisambiguation(g(row, COL.artist));
   const albumTitle = g(row, COL.title);
   const titleNorm = normName(track.title);
   const posNorm = normName(track.position);
@@ -3069,6 +3161,7 @@ function renderConfig() {
           <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit" target="_blank" class="btn">Abrir Google Sheet ↗</a>
         </div>
       </div>
+      ${renderResetRipeadosSection()}
     </div>`;
 }
 
@@ -3997,7 +4090,7 @@ async function saveToSheet(idx) {
 
 // ─── MODAL ────────────────────────────────────────────────────────────────────
 function openModal() {
-  newRec = { artist:'', title:'', year:'', label:'', catalog:'', genre:'House', notes:'' };
+  newRec = { artist:'', title:'', year:'', label:'', catalog:'', genre:'House', notes:'', releaseId:'', thumb:'' };
   document.getElementById('modal-add').style.display = 'flex';
   document.getElementById('f-artist').value = '';
   document.getElementById('f-title').value = '';
@@ -4013,9 +4106,9 @@ function closeModal() {
 
 function updateNewRec(field, val) { newRec[field] = val; }
 
-function addRecord() {
+async function addRecord() {
   if (!newRec.artist || !newRec.title) { showToast('⚠ Artista y título son obligatorios', true); return; }
-  const row = new Array(25).fill('');
+  const row = new Array(32).fill('');
   row[COL.catalog] = newRec.catalog;
   row[COL.artist] = newRec.artist;
   row[COL.title] = newRec.title;
@@ -4023,15 +4116,77 @@ function addRecord() {
   row[COL.year] = newRec.year;
   row[COL.genre] = newRec.genre;
   row[COL.format] = '12"';
-  row[COL.fuente] = 'Manual';
+  row[COL.fuente] = newRec.releaseId ? 'Discogs' : 'Manual';
   row[COL.notes] = newRec.notes;
   row[COL.date_added] = new Date().toLocaleDateString('es-ES');
   row[COL.ripeado] = 'No';
+  // Mismo convenio que usa el resto de la app: el release_id guardado lleva un dígito de
+  // más al final (se quita con .slice(0,-1) al usarlo) — sin esto, este disco no podría
+  // encontrar su carátula, ni aparecer en el buscador del Cortador, ni aceptar que le
+  // arrastres una carátula a mano encima. Es justo lo que te estaba fallando.
+  if (newRec.releaseId) row[COL.release_id] = String(newRec.releaseId) + '0';
+
   allData.unshift(row);
   closeModal();
   renderStats();
   renderView();
-  showToast('✓ Disco añadido — recuerda guardar en el Sheet');
+
+  if (newRec.releaseId && newRec.thumb) {
+    coverCache[String(newRec.releaseId)] = newRec.thumb;
+  }
+
+  if (!row[COL.release_id]) {
+    showToast('✓ Disco añadido aquí — como no venía de una búsqueda en Discogs, no tiene release_id, así que no podré confirmar el guardado en el Sheet ni traer su carátula sola. Añádelo también a mano en el Sheet.', true);
+    return;
+  }
+
+  showToast('Guardando en el Sheet...');
+  try {
+    await addRowToSheet(row);
+    await new Promise(r => setTimeout(r, 1500));
+    let ok = await verifyRowAdded(row[COL.release_id]);
+    if (!ok) {
+      await addRowToSheet(row);
+      await new Promise(r => setTimeout(r, 1500));
+      ok = await verifyRowAdded(row[COL.release_id]);
+    }
+    if (ok) {
+      showToast('✓ Disco añadido y confirmado en el Sheet');
+    } else {
+      showToast('⚠ No se pudo confirmar el guardado en el Sheet — puede que tu Apps Script todavía no sepa añadir filas nuevas. Añádelo a mano por ahora, y dímelo para revisarlo.', true);
+    }
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ Error guardando en el Sheet — añádelo a mano por ahora', true);
+  }
+}
+
+// ⚠ Igual que borrar: requiere que tu Apps Script reconozca action:'add' y añada una fila
+// nueva al final con estos 32 valores, en el mismo orden que COL — no lo puedo verificar
+// desde aquí, así que compruébalo la primera vez y dime si funciona o no.
+async function addRowToSheet(row) {
+  return fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({
+      action: 'add',
+      row: row,
+    }),
+  });
+}
+
+async function verifyRowAdded(releaseId) {
+  if (!releaseId) return false;
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, { method: 'GET' });
+    const json = await res.json();
+    if (!json.ok) return false;
+    const dataRows = json.data.slice(1);
+    return dataRows.some(r => String(r[COL.release_id] ?? '').trim() === String(releaseId).trim());
+  } catch(e) {
+    return false;
+  }
 }
 
 // ─── DISCOGS ──────────────────────────────────────────────────────────────────
@@ -4052,7 +4207,7 @@ async function searchDiscogs() {
     if (results.length === 0) { box.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text3)">Sin resultados en Discogs</div>'; }
     else {
       box.innerHTML = `<div class="discogs-box">${results.map((r,i) => `
-        <div class="discogs-item" onclick="selectDiscogs(${i},'${escJ(r.title)}','${escJ(r.year||'')}','${escJ((r.label&&r.label[0])||'')}','${escJ(r.catno||'')}','${escJ(r.thumb||'')}')">
+        <div class="discogs-item" onclick="selectDiscogs(${i},'${escJ(r.title)}','${escJ(r.year||'')}','${escJ((r.label&&r.label[0])||'')}','${escJ(r.catno||'')}','${escJ(r.thumb||'')}','${escJ(r.id||'')}')">
           <div class="discogs-thumb">${r.thumb ? `<img src="${r.thumb}" loading="lazy" style="width:100%;height:100%;object-fit:cover">` : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/></svg>'}</div>
           <div class="discogs-info">
             <div class="discogs-title">${r.title}</div>
@@ -4069,7 +4224,7 @@ async function searchDiscogs() {
 
 function escJ(s) { return (s||'').replace(/'/g,"\\'").replace(/\n/g,' '); }
 
-function selectDiscogs(i, title, year, label, catno, thumb) {
+function selectDiscogs(i, title, year, label, catno, thumb, releaseId) {
   const parts = title.split(' - ');
   if (parts.length >= 2) {
     document.getElementById('f-artist').value = parts[0]; newRec.artist = parts[0];
@@ -4080,6 +4235,11 @@ function selectDiscogs(i, title, year, label, catno, thumb) {
   if (year) { document.getElementById('f-year').value = year; newRec.year = year; }
   if (label) { document.getElementById('f-label').value = label; newRec.label = label; }
   if (catno) { document.getElementById('f-catalog').value = catno; newRec.catalog = catno; }
+  // Esto es lo que faltaba: sin guardar el release_id real de Discogs, el disco añadido
+  // así nunca podía encontrar su carátula, ni aparecer en el buscador del Cortador, ni
+  // dejarse arrastrar una carátula manual — todo eso depende de tener un release_id.
+  newRec.releaseId = releaseId || '';
+  newRec.thumb = thumb || '';
   document.getElementById('discogs-results').style.display = 'none';
 }
 
@@ -4131,11 +4291,11 @@ const KALLAX_4x4 = [
 ];
 
 function renderKallax(selectedSlot, onSelect) {
-  // Construir mapa de huecos ocupados
-  const occupied = {};
+  // Contar cuántos discos hay ya en cada hueco (no solo si está ocupado o no)
+  const counts = {};
   allData.forEach(r => {
     const slot = g(r, COL.kallax_slot);
-    if (slot) occupied[slot] = true;
+    if (slot) counts[slot] = (counts[slot] || 0) + 1;
   });
 
   function grid(matrix, label) {
@@ -4146,8 +4306,13 @@ function renderKallax(selectedSlot, onSelect) {
         ${matrix.map(row => row.map(slot => {
           if (slot === null) return `<div class="kc empty"></div>`;
           const isSel = String(selectedSlot) === String(slot);
-          const isOcc = occupied[slot] && !isSel;
-          return `<div class="kc ${isSel ? 'on' : isOcc ? 'occupied' : ''}" onclick="${onSelect}(${slot})" title="Hueco ${slot}">${slot}</div>`;
+          const count = counts[slot] || 0;
+          const isOcc = count > 0 && !isSel;
+          const lleno = count >= 100;
+          return `<div class="kc ${isSel ? 'on' : isOcc ? 'occupied' : ''}" onclick="${onSelect}(${slot})" title="Hueco ${slot} — ${count}/100 discos">
+            <div>${slot}</div>
+            <div style="font-size:8px;font-weight:500;${lleno ? 'color:#e05252;font-weight:700' : 'opacity:.7'}">${count}/100</div>
+          </div>`;
         }).join('')).join('')}
       </div>
     </div>`;
