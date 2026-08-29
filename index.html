@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.117 — Dj Petrik</title>
+<title>VinylBase v2.118 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.117</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.118</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2535,6 +2535,8 @@ function renderExplorador() {
 // ─── COMPARADOR DE CARPETAS (comparar dos carpetas + subcarpetas, mover/copiar lo que falte) ──
 let cmpDirA = null, cmpDirB = null;         // handles de las dos carpetas elegidas
 let cmpNombreA = '', cmpNombreB = '';
+let cmpDirC = null, cmpNombreC = '';        // tercera carpeta, para copiar y analizar aparte
+let cmpSelAmbos = new Set();
 let cmpBasis = 'namesize';                  // 'namesize' | 'name' | 'hash'
 let cmpEstructura = 'recrear';              // 'recrear' | 'plano'
 let cmpScanning = false;
@@ -2553,9 +2555,9 @@ async function elegirCarpetaComparador(lado) {
   let handle;
   try { handle = await window.showDirectoryPicker({ mode: 'readwrite' }); }
   catch(e) { return; }
-  if (lado === 'a') { cmpDirA = handle; cmpNombreA = handle.name; }
-  else { cmpDirB = handle; cmpNombreB = handle.name; }
-  cmpResults = null; cmpError = null; cmpSelA.clear(); cmpSelB.clear();
+  if (lado === 'a') { cmpDirA = handle; cmpNombreA = handle.name; cmpResults = null; cmpError = null; cmpSelA.clear(); cmpSelB.clear(); cmpSelAmbos.clear(); }
+  else if (lado === 'b') { cmpDirB = handle; cmpNombreB = handle.name; cmpResults = null; cmpError = null; cmpSelA.clear(); cmpSelB.clear(); cmpSelAmbos.clear(); }
+  else { cmpDirC = handle; cmpNombreC = handle.name; } // C es solo destino de copia, no afecta a la comparación ya hecha
   renderComparador();
 }
 
@@ -2655,6 +2657,7 @@ async function ejecutarComparacion() {
   cmpScanning = true; cmpError = null; cmpResults = null;
   cmpScanCount = { a: 0, b: 0 };
   cmpKeyPhase = false; cmpKeyDone = 0; cmpKeyTotal = 0;
+  cmpSelA.clear(); cmpSelB.clear(); cmpSelAmbos.clear();
   renderComparador();
   try {
     const listaA = [], listaB = [];
@@ -2677,13 +2680,17 @@ async function ejecutarComparacion() {
 
     const soloA = [], soloB = [], enAmbos = [];
     for (const [clave, e] of mapaA) {
-      if (mapaB.has(clave)) enAmbos.push(e); else soloA.push(e);
+      if (mapaB.has(clave)) {
+        const eB = mapaB.get(clave);
+        enAmbos.push({ ...e, relPathB: eB.relPath, nameB: eB.name, sizeB: eB.size, handleB: eB.handle, parentHandleB: eB.parentHandle });
+      } else soloA.push(e);
     }
     for (const [clave, e] of mapaB) {
       if (!mapaA.has(clave)) soloB.push(e);
     }
     soloA.sort((x, y) => x.relPath.localeCompare(y.relPath, 'es'));
     soloB.sort((x, y) => x.relPath.localeCompare(y.relPath, 'es'));
+    enAmbos.sort((x, y) => x.relPath.localeCompare(y.relPath, 'es'));
     cmpResults = { soloA, soloB, enAmbos };
   } catch(e) {
     console.error('[Comparador] error', e);
@@ -2695,14 +2702,13 @@ async function ejecutarComparacion() {
 }
 
 function toggleSelComparador(lado, relPath) {
-  const set = lado === 'a' ? cmpSelA : cmpSelB;
+  const { set } = getSelYListaC(lado);
   if (set.has(relPath)) set.delete(relPath); else set.add(relPath);
   renderComparador();
 }
 
 function seleccionarTodosComparador(lado, valor) {
-  const set = lado === 'a' ? cmpSelA : cmpSelB;
-  const lista = lado === 'a' ? cmpResults.soloA : cmpResults.soloB;
+  const { set, lista } = getSelYListaC(lado);
   set.clear();
   if (valor) lista.forEach(e => set.add(e.relPath));
   renderComparador();
@@ -2769,6 +2775,39 @@ async function moverOCopiarSeleccionComparador(lado, modo) {
   renderComparador();
 }
 
+function getSelYListaC(lado) {
+  if (lado === 'a') return { set: cmpSelA, lista: cmpResults.soloA };
+  if (lado === 'b') return { set: cmpSelB, lista: cmpResults.soloB };
+  return { set: cmpSelAmbos, lista: cmpResults.enAmbos };
+}
+
+async function copiarATerceraComparador(lado) {
+  if (!cmpDirC) { showToast('⚠ Elige antes la Carpeta C', true); return; }
+  const { set, lista } = getSelYListaC(lado);
+  const seleccionados = lista.filter(e => set.has(e.relPath));
+  if (!seleccionados.length) { showToast('⚠ No has marcado ningún archivo', true); return; }
+  if (!confirm(`Vas a copiar ${seleccionados.length} archivo(s) a "${cmpNombreC}" para analizarlos.\n\n(Los originales no se tocan.)\n\n¿Seguro?`)) return;
+
+  cmpBusy = true; cmpBusyMsg = `Copiando a "${cmpNombreC}" 0/${seleccionados.length}...`;
+  renderComparador();
+  let hechos = 0, saltados = 0, errores = 0;
+  for (const entry of seleccionados) {
+    try {
+      const resultado = await escribirEnDestino(entry, cmpDirC);
+      if (resultado === 'ya-existia') saltados++; else hechos++;
+    } catch(e) {
+      console.error('[Comparador] error copiando a C con', entry.relPath, e);
+      errores++;
+    }
+    cmpBusyMsg = `Copiando a "${cmpNombreC}" ${hechos + saltados + errores}/${seleccionados.length}...`;
+    renderComparador();
+  }
+  cmpBusy = false;
+  showToast(`✓ ${hechos} copiado(s) a "${cmpNombreC}"${saltados ? `, ${saltados} ya existían allí` : ''}${errores ? `, ${errores} con error` : ''}`);
+  set.clear();
+  renderComparador();
+}
+
 function fmtBytesComparador(n) {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -2787,14 +2826,42 @@ function renderListaComparador(lado) {
       <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosComparador('${lado}', false)">Ninguno</button>
       <span style="color:var(--text3)">${set.size} marcado(s)</span>
     </div>
-    <div style="display:flex;gap:6px;margin-bottom:8px">
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn btn-accent" style="font-size:11px" ${cmpBusy ? 'disabled' : ''} onclick="moverOCopiarSeleccionComparador('${lado}', 'copiar')">📋 Copiar marcados a "${destino}"</button>
       <button class="btn" style="font-size:11px" ${cmpBusy ? 'disabled' : ''} onclick="moverOCopiarSeleccionComparador('${lado}', 'mover')">➡ Mover marcados a "${destino}"</button>
+      <button class="btn" style="font-size:11px" ${cmpBusy ? 'disabled' : ''} onclick="copiarATerceraComparador('${lado}')">🔎 Copiar marcados a Carpeta C${cmpNombreC ? ` ("${cmpNombreC}")` : ''}</button>
     </div>
     <div class="tracklist" style="max-height:340px;overflow-y:auto">
       ${lista.map(e => `<div class="track-row" style="cursor:pointer" onclick="toggleSelComparador('${lado}', ${JSON.stringify(e.relPath)})">
         <input type="checkbox" ${set.has(e.relPath) ? 'checked' : ''} onclick="event.stopPropagation();toggleSelComparador('${lado}', ${JSON.stringify(e.relPath)})">
         <span class="track-title" style="flex:1;font-size:12px">${e.relPath}</span>
+        <span style="font-size:11px;color:var(--text3);white-space:nowrap">${fmtBytesComparador(e.size)}</span>
+      </div>`).join('')}
+    </div>
+  `;
+}
+
+function renderListaAmbosComparador() {
+  const lista = cmpResults.enAmbos;
+  const set = cmpSelAmbos;
+  if (!lista.length) return `<p style="font-size:12px;color:var(--text3);padding:10px">No hay coincidencias entre las dos carpetas</p>`;
+  return `
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:11px">
+      <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosComparador('ambos', true)">Marcar todos (${lista.length})</button>
+      <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosComparador('ambos', false)">Ninguno</button>
+      <span style="color:var(--text3)">${set.size} marcado(s)</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button class="btn btn-accent" style="font-size:11px" ${cmpBusy ? 'disabled' : ''} onclick="copiarATerceraComparador('ambos')">🔎 Copiar marcados a Carpeta C${cmpNombreC ? ` ("${cmpNombreC}")` : ''}</button>
+    </div>
+    <p style="font-size:11px;color:var(--text3);margin-bottom:6px">Se copia la versión de "${cmpNombreA}" de cada coincidencia (se muestran las dos rutas para que las compares).</p>
+    <div class="tracklist" style="max-height:340px;overflow-y:auto">
+      ${lista.map(e => `<div class="track-row" style="cursor:pointer" onclick="toggleSelComparador('ambos', ${JSON.stringify(e.relPath)})">
+        <input type="checkbox" ${set.has(e.relPath) ? 'checked' : ''} onclick="event.stopPropagation();toggleSelComparador('ambos', ${JSON.stringify(e.relPath)})">
+        <span class="track-title" style="flex:1;font-size:12px">
+          <span style="color:var(--text3)">A:</span> ${e.relPath}<br>
+          <span style="color:var(--text3)">B:</span> ${e.relPathB}
+        </span>
         <span style="font-size:11px;color:var(--text3);white-space:nowrap">${fmtBytesComparador(e.size)}</span>
       </div>`).join('')}
     </div>
@@ -2808,10 +2875,11 @@ function renderComparador() {
       <div style="font-weight:600">🔀 Comparador de carpetas</div>
     </div>
     <div style="padding:16px;overflow-y:auto;height:calc(100% - 50px)">
-      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Elige dos carpetas (con sus subcarpetas incluidas) y compáralas para ver qué te falta en cada lado. Solo se comparan archivos de música (.wav .flac .mp3) — el resto (jpg, etc.) se ignora.</p>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Elige dos carpetas (con sus subcarpetas incluidas) y compáralas para ver qué te falta en cada lado. Solo se comparan archivos de música (.wav .flac .mp3) — el resto (jpg, etc.) se ignora. Con la Carpeta C puedes copiar aparte los que quieras analizar (carátulas, comprobaciones...) sin tocar los originales.</p>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
         <button class="btn" onclick="elegirCarpetaComparador('a')">📁 Carpeta A: ${cmpNombreA || 'elegir...'}</button>
         <button class="btn" onclick="elegirCarpetaComparador('b')">📁 Carpeta B: ${cmpNombreB || 'elegir...'}</button>
+        <button class="btn" onclick="elegirCarpetaComparador('c')">🔎 Carpeta C (para analizar): ${cmpNombreC || 'elegir...'}</button>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:14px;font-size:12px">
         <label>Comparar por:
@@ -2849,6 +2917,10 @@ function renderComparador() {
             <div class="d-section" style="margin-bottom:6px">Solo en "${cmpNombreB}"</div>
             ${renderListaComparador('b')}
           </div>
+        </div>
+        <div style="margin-top:20px">
+          <div class="d-section" style="margin-bottom:6px">En ambos (coinciden) — para analizar en Carpeta C</div>
+          ${renderListaAmbosComparador()}
         </div>
       ` : ''}
     </div>
