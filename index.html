@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.114 — Dj Petrik</title>
+<title>VinylBase v2.115 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.114</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.115</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2572,6 +2572,7 @@ async function escanearCarpetaComparador(dirHandle, prefix, lado, out) {
     if (handle.kind === 'directory') {
       await escanearCarpetaComparador(handle, relPath, lado, out);
     } else {
+      if (!/\.(wav|flac|mp3)$/i.test(name)) continue; // solo música — jpg y otros se ignoran
       let size = 0;
       try { const f = await handle.getFile(); size = f.size; } catch(e) { /* se queda en 0 */ }
       out.push({ relPath, name, size, handle, parentHandle: dirHandle });
@@ -2733,7 +2734,7 @@ function renderComparador() {
       <div style="font-weight:600">🔀 Comparador de carpetas</div>
     </div>
     <div style="padding:16px;overflow-y:auto;height:calc(100% - 50px)">
-      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Elige dos carpetas (con sus subcarpetas incluidas) y compáralas para ver qué te falta en cada lado.</p>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Elige dos carpetas (con sus subcarpetas incluidas) y compáralas para ver qué te falta en cada lado. Solo se comparan archivos de música (.wav .flac .mp3) — el resto (jpg, etc.) se ignora.</p>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
         <button class="btn" onclick="elegirCarpetaComparador('a')">📁 Carpeta A: ${cmpNombreA || 'elegir...'}</button>
         <button class="btn" onclick="elegirCarpetaComparador('b')">📁 Carpeta B: ${cmpNombreB || 'elegir...'}</button>
