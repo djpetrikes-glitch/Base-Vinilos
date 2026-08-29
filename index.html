@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.116 — Dj Petrik</title>
+<title>VinylBase v2.117 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.116</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.117</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2585,8 +2585,55 @@ async function escanearCarpetaComparador(dirHandle, prefix, lado, out) {
   }
 }
 
+// jsmediatags no tiene lector para WAV (solo detecta ID3/FLAC/MP4 por firma de bytes).
+// Un WAV empieza por "RIFF....WAVE", así que sus metadatos hay que sacarlos a mano
+// del chunk RIFF "LIST INFO" (INAM/IART), o del chunk "id3 " si el tageador lo incrustó.
+function leerChunkWav(buf) {
+  const dv = new DataView(buf);
+  const len = buf.byteLength;
+  const vacio = { title: '', artist: '', id3Buffer: null };
+  if (len < 12) return vacio;
+  const leerId = (o) => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+  if (leerId(0) !== 'RIFF' || leerId(8) !== 'WAVE') return vacio;
+
+  let offset = 12, title = '', artist = '', id3Buffer = null;
+  while (offset + 8 <= len) {
+    const chunkId = leerId(offset);
+    const chunkSize = dv.getUint32(offset + 4, true);
+    const dataStart = offset + 8;
+    if (chunkSize < 0 || dataStart + chunkSize > len) break; // chunk corrupto/truncado
+    if (chunkId === 'LIST' && leerId(dataStart) === 'INFO') {
+      let sub = dataStart + 4;
+      const subEnd = dataStart + chunkSize;
+      while (sub + 8 <= subEnd) {
+        const subId = leerId(sub);
+        const subSize = dv.getUint32(sub + 4, true);
+        const subDataStart = sub + 8;
+        if (subDataStart + subSize > subEnd) break;
+        const texto = new TextDecoder('utf-8').decode(new Uint8Array(buf, subDataStart, subSize)).replace(/\0+$/, '').trim();
+        if (subId === 'INAM') title = texto;
+        else if (subId === 'IART') artist = texto;
+        sub = subDataStart + subSize + (subSize % 2);
+      }
+    } else if (chunkId.toLowerCase() === 'id3 ') {
+      id3Buffer = buf.slice(dataStart, dataStart + chunkSize);
+    }
+    offset = dataStart + chunkSize + (chunkSize % 2); // los chunks RIFF van alineados a byte par
+  }
+  return { title, artist, id3Buffer };
+}
+
 async function tagsArchivoComparador(entry) {
   const file = await entry.handle.getFile();
+  if (/\.wav$/i.test(entry.name)) {
+    const buf = await file.arrayBuffer();
+    const info = leerChunkWav(buf);
+    if (info.id3Buffer) {
+      const tagsId3 = await readTags(new Blob([info.id3Buffer]));
+      if (tagsId3.title) return { title: normName(tagsId3.title), artist: normName(tagsId3.artist) };
+    }
+    return { title: normName(info.title), artist: normName(info.artist) };
+  }
   const tags = await readTags(file);
   return { title: normName(tags.title), artist: normName(tags.artist) };
 }
