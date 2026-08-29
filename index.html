@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.118 — Dj Petrik</title>
+<title>VinylBase v2.119 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.118</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.119</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -4963,29 +4963,26 @@ function extractDiscogsReleaseId(input) {
 // Con el ID de Discogs ya no hace falta escribir artista/título a mano — se piden
 // directamente a Discogs (endpoint de la ficha del release, no el de búsqueda, así que
 // no depende de que "Buscar en Discogs" esté funcionando ahora mismo).
-async function buscarPorReleaseId() {
-  const idLimpio = extractDiscogsReleaseId(document.getElementById('f-release-id')?.value);
-  if (!idLimpio) { showToast('⚠ Escribe o pega un ID o una URL de Discogs válidos primero', true); return; }
-
-  showToast('Trayendo los datos de Discogs...');
+// Función compartida: la usan tanto el botón "Rellenar" como "Añadir disco" (por si
+// pegaste el ID y le diste directamente a Añadir sin pulsar Rellenar antes).
+async function traerDatosDeDiscogsPorId(idLimpio) {
   try {
     const res = await fetch(`https://api.discogs.com/releases/${idLimpio}`, { headers: DISCOGS_HEADERS });
     if (!res.ok) {
       let motivo = `HTTP ${res.status}`;
       try { motivo = (await res.json()).message || motivo; } catch(e) {}
       if (res.status === 429) motivo = 'Demasiadas peticiones seguidas a Discogs — espera un minuto y prueba otra vez.';
-      showToast('⚠ Discogs respondió con error: ' + motivo, true);
-      return;
+      return { ok: false, motivo };
     }
     const data = await res.json();
 
     const artistas = (data.artists || []).map(a => a.name).join(', ');
-    if (artistas) { newRec.artist = artistas; document.getElementById('f-artist').value = artistas; }
-    if (data.title) { newRec.title = data.title; document.getElementById('f-title').value = data.title; }
-    if (data.year) { newRec.year = String(data.year); document.getElementById('f-year').value = data.year; }
+    if (artistas) { newRec.artist = artistas; const el = document.getElementById('f-artist'); if (el) el.value = artistas; }
+    if (data.title) { newRec.title = data.title; const el = document.getElementById('f-title'); if (el) el.value = data.title; }
+    if (data.year) { newRec.year = String(data.year); const el = document.getElementById('f-year'); if (el) el.value = data.year; }
     const labelObj = (data.labels && data.labels[0]) || null;
-    if (labelObj && labelObj.name) { newRec.label = labelObj.name; document.getElementById('f-label').value = labelObj.name; }
-    if (labelObj && labelObj.catno) { newRec.catalog = labelObj.catno; document.getElementById('f-catalog').value = labelObj.catno; }
+    if (labelObj && labelObj.name) { newRec.label = labelObj.name; const el = document.getElementById('f-label'); if (el) el.value = labelObj.name; }
+    if (labelObj && labelObj.catno) { newRec.catalog = labelObj.catno; const el = document.getElementById('f-catalog'); if (el) el.value = labelObj.catno; }
     const genero = (data.genres && data.genres[0]) || '';
     if (genero) {
       const sel = document.getElementById('f-genre');
@@ -4994,14 +4991,32 @@ async function buscarPorReleaseId() {
     if (data.images && data.images.length) {
       newRec.thumb = data.images[0].uri150 || data.images[0].uri || '';
     }
-    showToast('✓ Datos traídos de Discogs — revisa que estén bien y añade el disco');
+    return { ok: true };
   } catch(e) {
     console.error(e);
-    showToast('⚠ No se pudo conectar con Discogs para traer los datos — rellena artista y título a mano por ahora', true);
+    return { ok: false, motivo: 'No se pudo conectar con Discogs', esConexion: true };
   }
 }
 
+async function buscarPorReleaseId() {
+  const idLimpio = extractDiscogsReleaseId(document.getElementById('f-release-id')?.value);
+  if (!idLimpio) { showToast('⚠ Escribe o pega un ID o una URL de Discogs válidos primero', true); return; }
+  showToast('Trayendo los datos de Discogs...');
+  const r = await traerDatosDeDiscogsPorId(idLimpio);
+  if (r.ok) showToast('✓ Datos traídos de Discogs — revisa que estén bien y añade el disco');
+  else if (r.esConexion) showToast('⚠ No se pudo conectar con Discogs para traer los datos — rellena artista y título a mano por ahora', true);
+  else showToast('⚠ Discogs respondió con error: ' + r.motivo, true);
+}
+
 async function addRecord() {
+  if (!newRec.artist || !newRec.title) {
+    const idParaAutoRellenar = extractDiscogsReleaseId(newRec.releaseId || document.getElementById('f-release-id')?.value);
+    if (idParaAutoRellenar) {
+      showToast('Faltan artista/título — trayéndolos de Discogs con el ID puesto...');
+      const r = await traerDatosDeDiscogsPorId(idParaAutoRellenar);
+      if (!r.ok) { showToast('⚠ No se pudo traer de Discogs (' + (r.motivo || 'error') + ') — rellena artista y título a mano', true); return; }
+    }
+  }
   if (!newRec.artist || !newRec.title) { showToast('⚠ Artista y título son obligatorios', true); return; }
   const releaseIdLimpio = extractDiscogsReleaseId(newRec.releaseId);
   const row = new Array(32).fill('');
