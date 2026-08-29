@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.115 — Dj Petrik</title>
+<title>VinylBase v2.116 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.115</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.116</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -2539,6 +2539,9 @@ let cmpBasis = 'namesize';                  // 'namesize' | 'name' | 'hash'
 let cmpEstructura = 'recrear';              // 'recrear' | 'plano'
 let cmpScanning = false;
 let cmpScanCount = { a: 0, b: 0 };
+let cmpKeyPhase = false;
+let cmpKeyDone = 0;
+let cmpKeyTotal = 0;
 let cmpResults = null;                      // { soloA:[], soloB:[], enAmbos:[] }
 let cmpSelA = new Set();
 let cmpSelB = new Set();
@@ -2582,9 +2585,21 @@ async function escanearCarpetaComparador(dirHandle, prefix, lado, out) {
   }
 }
 
+async function tagsArchivoComparador(entry) {
+  const file = await entry.handle.getFile();
+  const tags = await readTags(file);
+  return { title: normName(tags.title), artist: normName(tags.artist) };
+}
+
 async function claveComparador(entry) {
   if (cmpBasis === 'name') return entry.name.toLowerCase();
   if (cmpBasis === 'hash') return await hashArchivoComparador(entry.handle);
+  if (cmpBasis === 'tags') {
+    const t = await tagsArchivoComparador(entry);
+    // sin título en la etiqueta -> no fiable, cae a nombre+tamaño para no emparejar cosas al azar
+    if (!t.title) return 'notags:' + entry.name.toLowerCase() + '|' + entry.size;
+    return 'tags:' + t.title + '|' + t.artist;
+  }
   return entry.name.toLowerCase() + '|' + entry.size; // namesize
 }
 
@@ -2592,15 +2607,26 @@ async function ejecutarComparacion() {
   if (!cmpDirA || !cmpDirB) { showToast('⚠ Elige las dos carpetas primero', true); return; }
   cmpScanning = true; cmpError = null; cmpResults = null;
   cmpScanCount = { a: 0, b: 0 };
+  cmpKeyPhase = false; cmpKeyDone = 0; cmpKeyTotal = 0;
   renderComparador();
   try {
     const listaA = [], listaB = [];
     await escanearCarpetaComparador(cmpDirA, '', 'a', listaA);
     await escanearCarpetaComparador(cmpDirB, '', 'b', listaB);
 
+    cmpKeyPhase = true;
+    cmpKeyTotal = listaA.length + listaB.length;
     const mapaA = new Map(), mapaB = new Map();
-    for (const e of listaA) mapaA.set(await claveComparador(e), e);
-    for (const e of listaB) mapaB.set(await claveComparador(e), e);
+    for (const e of listaA) {
+      mapaA.set(await claveComparador(e), e);
+      cmpKeyDone++;
+      if (cmpKeyDone % 25 === 0) renderComparador();
+    }
+    for (const e of listaB) {
+      mapaB.set(await claveComparador(e), e);
+      cmpKeyDone++;
+      if (cmpKeyDone % 25 === 0) renderComparador();
+    }
 
     const soloA = [], soloB = [], enAmbos = [];
     for (const [clave, e] of mapaA) {
@@ -2617,6 +2643,7 @@ async function ejecutarComparacion() {
     cmpError = (e.name ? e.name + ': ' : '') + e.message;
   }
   cmpScanning = false;
+  cmpKeyPhase = false;
   renderComparador();
 }
 
@@ -2744,6 +2771,7 @@ function renderComparador() {
           <select onchange="cambiarBasisComparador(this.value)" ${cmpScanning ? 'disabled' : ''}>
             <option value="namesize" ${cmpBasis === 'namesize' ? 'selected' : ''}>Nombre + tamaño (rápido)</option>
             <option value="name" ${cmpBasis === 'name' ? 'selected' : ''}>Solo nombre de archivo</option>
+            <option value="tags" ${cmpBasis === 'tags' ? 'selected' : ''}>Título + artista (etiquetas ID3)</option>
             <option value="hash" ${cmpBasis === 'hash' ? 'selected' : ''}>Contenido exacto (lento)</option>
           </select>
         </label>
@@ -2756,7 +2784,8 @@ function renderComparador() {
         <button class="btn btn-accent" ${(!cmpDirA || !cmpDirB || cmpScanning) ? 'disabled' : ''} onclick="ejecutarComparacion()">🔍 Comparar</button>
       </div>
 
-      ${cmpScanning ? `<p style="font-size:12px;color:var(--text3)">Escaneando... A: ${cmpScanCount.a} archivo(s) · B: ${cmpScanCount.b} archivo(s)</p>` : ''}
+      ${cmpScanning && !cmpKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Escaneando... A: ${cmpScanCount.a} archivo(s) · B: ${cmpScanCount.b} archivo(s)</p>` : ''}
+      ${cmpKeyPhase ? `<p style="font-size:12px;color:var(--text3)">${cmpBasis === 'tags' ? 'Leyendo etiquetas' : cmpBasis === 'hash' ? 'Calculando huellas' : 'Comparando'}... ${cmpKeyDone}/${cmpKeyTotal}</p>` : ''}
       ${cmpBusy ? `<p style="font-size:12px;color:var(--accent)">${cmpBusyMsg}</p>` : ''}
       ${cmpError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${cmpError}</p>` : ''}
 
