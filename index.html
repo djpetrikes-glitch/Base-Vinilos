@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.111 — Dj Petrik</title>
+<title>VinylBase v2.114 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.111</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.114</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -268,6 +268,10 @@
     <button class="nav-item" id="nav-explorador" onclick="setView('explorador')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       Explorador
+    </button>
+    <button class="nav-item" id="nav-comparador" onclick="setView('comparador')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
+      Comparador
     </button>
     <div class="nav-section">DJ</div>
     <button class="nav-item" id="nav-sesiones" onclick="setView('sesiones')">
@@ -2371,17 +2375,34 @@ let explorerStack = [];          // [{name, handle}, ...] desde la raíz hasta d
 let explorerEntries = null;      // null = aún sin cargar; {carpetas:[], archivos:[]} ya cargado
 let explorerLoading = false;
 let explorerPlayingUrl = null;   // URL del objeto del audio que se está reproduciendo ahora
+let explorerError = null;        // texto de error real, para no confundirlo con "carpeta vacía"
 
 async function elegirRaizExplorador(cual) {
+  console.log('[Explorador] elegirRaizExplorador', cual);
   let handle = null;
   if (cual === 'root') handle = rootDirHandle;
   else if (cual === 'music1') handle = musicDirHandle;
   else if (cual === 'music2') handle = musicDirHandle2;
   else if (cual === 'cortadorOut') handle = cortadorOutDirHandle;
   else if (cual === 'otra') {
-    try { handle = await window.showDirectoryPicker(); } catch(e) { return; }
+    try { handle = await window.showDirectoryPicker(); }
+    catch(e) { console.log('[Explorador] showDirectoryPicker cancelado/error', e); return; }
   }
+  console.log('[Explorador] handle obtenido:', handle);
   if (!handle) { showToast('⚠ Esa carpeta no está conectada — ve a Configuración primero', true); return; }
+  if (cual !== 'otra') {
+    try {
+      let perm = await handle.queryPermission({ mode: 'read' });
+      console.log('[Explorador] queryPermission ->', perm);
+      if (perm !== 'granted') perm = await handle.requestPermission({ mode: 'read' });
+      console.log('[Explorador] requestPermission ->', perm);
+      if (perm !== 'granted') { showToast('⚠ No se concedió acceso a esa carpeta', true); return; }
+    } catch(e) {
+      console.error('[Explorador] error comprobando permisos', e);
+      showToast('⚠ Error comprobando permisos: ' + e.message, true);
+      return;
+    }
+  }
   explorerRootHandle = handle;
   explorerStack = [{ name: handle.name, handle }];
   await cargarEntradasExplorador();
@@ -2392,15 +2413,18 @@ function cambiarCarpetaExplorador() {
   explorerRootHandle = null;
   explorerStack = [];
   explorerEntries = null;
+  explorerError = null;
   renderExplorador();
 }
 
 async function cargarEntradasExplorador() {
   explorerLoading = true;
   explorerEntries = null;
+  explorerError = null;
   renderExplorador();
   try {
     const dirActual = explorerStack[explorerStack.length - 1].handle;
+    console.log('[Explorador] leyendo carpeta:', dirActual.name);
     const carpetas = [], archivos = [];
     for await (const [name, handle] of dirActual.entries()) {
       if (handle.kind === 'directory') {
@@ -2411,11 +2435,13 @@ async function cargarEntradasExplorador() {
         archivos.push({ name, handle, size });
       }
     }
+    console.log('[Explorador] entradas encontradas — carpetas:', carpetas.length, 'archivos:', archivos.length);
     carpetas.sort((a, b) => a.name.localeCompare(b.name, 'es'));
     archivos.sort((a, b) => a.name.localeCompare(b.name, 'es'));
     explorerEntries = { carpetas, archivos };
   } catch(e) {
-    console.error(e);
+    console.error('[Explorador] ERROR leyendo la carpeta:', e);
+    explorerError = (e.name ? e.name + ': ' : '') + e.message;
     showToast('⚠ Error leyendo la carpeta: ' + e.message, true);
     explorerEntries = { carpetas: [], archivos: [] };
   }
@@ -2497,10 +2523,257 @@ function renderExplorador() {
             <span style="font-size:11px;color:var(--text3);margin-right:8px;white-space:nowrap">${fmtBytesExplorador(e.size)}</span>
             ${esAudioExplorador(e.name) ? `<button class="btn" style="font-size:11px;padding:3px 8px" onclick="reproducirArchivoExplorerPorIndice(${i})">▶</button>` : ''}
           </div>`).join('')}
-          ${explorerEntries && explorerEntries.carpetas.length === 0 && explorerEntries.archivos.length === 0 ? '<p style="font-size:12px;color:var(--text3);padding:10px">Carpeta vacía</p>' : ''}
+          ${explorerError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${explorerError}</p>` : ''}
+          ${!explorerError && explorerEntries && explorerEntries.carpetas.length === 0 && explorerEntries.archivos.length === 0 ? '<p style="font-size:12px;color:var(--text3);padding:10px">Carpeta vacía (0 subcarpetas, 0 archivos — leída sin errores)</p>' : ''}
         </div>
         `}
       `}
+    </div>
+  `;
+}
+
+// ─── COMPARADOR DE CARPETAS (comparar dos carpetas + subcarpetas, mover/copiar lo que falte) ──
+let cmpDirA = null, cmpDirB = null;         // handles de las dos carpetas elegidas
+let cmpNombreA = '', cmpNombreB = '';
+let cmpBasis = 'namesize';                  // 'namesize' | 'name' | 'hash'
+let cmpEstructura = 'recrear';              // 'recrear' | 'plano'
+let cmpScanning = false;
+let cmpScanCount = { a: 0, b: 0 };
+let cmpResults = null;                      // { soloA:[], soloB:[], enAmbos:[] }
+let cmpSelA = new Set();
+let cmpSelB = new Set();
+let cmpError = null;
+let cmpBusy = false;
+let cmpBusyMsg = '';
+
+async function elegirCarpetaComparador(lado) {
+  let handle;
+  try { handle = await window.showDirectoryPicker({ mode: 'readwrite' }); }
+  catch(e) { return; }
+  if (lado === 'a') { cmpDirA = handle; cmpNombreA = handle.name; }
+  else { cmpDirB = handle; cmpNombreB = handle.name; }
+  cmpResults = null; cmpError = null; cmpSelA.clear(); cmpSelB.clear();
+  renderComparador();
+}
+
+function cambiarBasisComparador(v) { cmpBasis = v; cmpResults = null; renderComparador(); }
+function cambiarEstructuraComparador(v) { cmpEstructura = v; }
+
+async function hashArchivoComparador(fileHandle) {
+  const file = await fileHandle.getFile();
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function escanearCarpetaComparador(dirHandle, prefix, lado, out) {
+  for await (const [name, handle] of dirHandle.entries()) {
+    const relPath = prefix ? prefix + '/' + name : name;
+    if (handle.kind === 'directory') {
+      await escanearCarpetaComparador(handle, relPath, lado, out);
+    } else {
+      let size = 0;
+      try { const f = await handle.getFile(); size = f.size; } catch(e) { /* se queda en 0 */ }
+      out.push({ relPath, name, size, handle, parentHandle: dirHandle });
+      cmpScanCount[lado]++;
+      if (cmpScanCount[lado] % 40 === 0) renderComparador();
+    }
+  }
+}
+
+async function claveComparador(entry) {
+  if (cmpBasis === 'name') return entry.name.toLowerCase();
+  if (cmpBasis === 'hash') return await hashArchivoComparador(entry.handle);
+  return entry.name.toLowerCase() + '|' + entry.size; // namesize
+}
+
+async function ejecutarComparacion() {
+  if (!cmpDirA || !cmpDirB) { showToast('⚠ Elige las dos carpetas primero', true); return; }
+  cmpScanning = true; cmpError = null; cmpResults = null;
+  cmpScanCount = { a: 0, b: 0 };
+  renderComparador();
+  try {
+    const listaA = [], listaB = [];
+    await escanearCarpetaComparador(cmpDirA, '', 'a', listaA);
+    await escanearCarpetaComparador(cmpDirB, '', 'b', listaB);
+
+    const mapaA = new Map(), mapaB = new Map();
+    for (const e of listaA) mapaA.set(await claveComparador(e), e);
+    for (const e of listaB) mapaB.set(await claveComparador(e), e);
+
+    const soloA = [], soloB = [], enAmbos = [];
+    for (const [clave, e] of mapaA) {
+      if (mapaB.has(clave)) enAmbos.push(e); else soloA.push(e);
+    }
+    for (const [clave, e] of mapaB) {
+      if (!mapaA.has(clave)) soloB.push(e);
+    }
+    soloA.sort((x, y) => x.relPath.localeCompare(y.relPath, 'es'));
+    soloB.sort((x, y) => x.relPath.localeCompare(y.relPath, 'es'));
+    cmpResults = { soloA, soloB, enAmbos };
+  } catch(e) {
+    console.error('[Comparador] error', e);
+    cmpError = (e.name ? e.name + ': ' : '') + e.message;
+  }
+  cmpScanning = false;
+  renderComparador();
+}
+
+function toggleSelComparador(lado, relPath) {
+  const set = lado === 'a' ? cmpSelA : cmpSelB;
+  if (set.has(relPath)) set.delete(relPath); else set.add(relPath);
+  renderComparador();
+}
+
+function seleccionarTodosComparador(lado, valor) {
+  const set = lado === 'a' ? cmpSelA : cmpSelB;
+  const lista = lado === 'a' ? cmpResults.soloA : cmpResults.soloB;
+  set.clear();
+  if (valor) lista.forEach(e => set.add(e.relPath));
+  renderComparador();
+}
+
+async function escribirEnDestino(entry, destinoRoot) {
+  const segmentos = cmpEstructura === 'recrear' ? entry.relPath.split('/') : [entry.name];
+  let dir = destinoRoot;
+  for (let i = 0; i < segmentos.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(segmentos[i], { create: true });
+  }
+  const nombreFinal = segmentos[segmentos.length - 1];
+  let yaExiste = false;
+  try { await dir.getFileHandle(nombreFinal); yaExiste = true; } catch(e) { /* no existe, bien */ }
+  if (yaExiste) return 'ya-existia';
+  const file = await entry.handle.getFile();
+  const buf = await file.arrayBuffer();
+  const destino = await dir.getFileHandle(nombreFinal, { create: true });
+  const writable = await destino.createWritable();
+  await writable.write(buf);
+  await writable.close();
+  return 'copiado';
+}
+
+async function moverOCopiarSeleccionComparador(lado, modo) {
+  const set = lado === 'a' ? cmpSelA : cmpSelB;
+  const lista = lado === 'a' ? cmpResults.soloA : cmpResults.soloB;
+  const destinoRoot = lado === 'a' ? cmpDirB : cmpDirA;
+  const seleccionados = lista.filter(e => set.has(e.relPath));
+  if (!seleccionados.length) { showToast('⚠ No has marcado ningún archivo', true); return; }
+  const verbo = modo === 'mover' ? 'mover' : 'copiar';
+  if (!confirm(`Vas a ${verbo} ${seleccionados.length} archivo(s) hacia "${lado === 'a' ? cmpNombreB : cmpNombreA}".\n\n¿Seguro?`)) return;
+
+  cmpBusy = true; cmpBusyMsg = `${verbo === 'mover' ? 'Moviendo' : 'Copiando'} 0/${seleccionados.length}...`;
+  renderComparador();
+  let hechos = 0, saltados = 0, errores = 0;
+  const hechosOk = [];
+  for (const entry of seleccionados) {
+    try {
+      const resultado = await escribirEnDestino(entry, destinoRoot);
+      if (resultado === 'ya-existia') { saltados++; }
+      else {
+        if (modo === 'mover') await entry.parentHandle.removeEntry(entry.name);
+        hechos++;
+      }
+      hechosOk.push(entry.relPath);
+    } catch(e) {
+      console.error('[Comparador] error con', entry.relPath, e);
+      errores++;
+    }
+    cmpBusyMsg = `${verbo === 'mover' ? 'Moviendo' : 'Copiando'} ${hechos + saltados + errores}/${seleccionados.length}...`;
+    renderComparador();
+  }
+  cmpBusy = false;
+  showToast(`✓ ${hechos} ${verbo === 'mover' ? 'movido(s)' : 'copiado(s)'}${saltados ? `, ${saltados} ya existían en destino` : ''}${errores ? `, ${errores} con error` : ''}`);
+
+  // Quita de la lista los que se han movido (los copiados se dejan, siguen existiendo en origen)
+  if (modo === 'mover') {
+    const hechosSet = new Set(hechosOk.filter((_, i) => true));
+    if (lado === 'a') cmpResults.soloA = cmpResults.soloA.filter(e => !hechosOk.includes(e.relPath));
+    else cmpResults.soloB = cmpResults.soloB.filter(e => !hechosOk.includes(e.relPath));
+  }
+  set.clear();
+  renderComparador();
+}
+
+function fmtBytesComparador(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+function renderListaComparador(lado) {
+  const lista = lado === 'a' ? cmpResults.soloA : cmpResults.soloB;
+  const set = lado === 'a' ? cmpSelA : cmpSelB;
+  const destino = lado === 'a' ? cmpNombreB : cmpNombreA;
+  if (!lista.length) return `<p style="font-size:12px;color:var(--text3);padding:10px">Nada que no esté ya en "${destino}"</p>`;
+  return `
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:11px">
+      <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosComparador('${lado}', true)">Marcar todos (${lista.length})</button>
+      <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosComparador('${lado}', false)">Ninguno</button>
+      <span style="color:var(--text3)">${set.size} marcado(s)</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button class="btn btn-accent" style="font-size:11px" ${cmpBusy ? 'disabled' : ''} onclick="moverOCopiarSeleccionComparador('${lado}', 'copiar')">📋 Copiar marcados a "${destino}"</button>
+      <button class="btn" style="font-size:11px" ${cmpBusy ? 'disabled' : ''} onclick="moverOCopiarSeleccionComparador('${lado}', 'mover')">➡ Mover marcados a "${destino}"</button>
+    </div>
+    <div class="tracklist" style="max-height:340px;overflow-y:auto">
+      ${lista.map(e => `<div class="track-row" style="cursor:pointer" onclick="toggleSelComparador('${lado}', ${JSON.stringify(e.relPath)})">
+        <input type="checkbox" ${set.has(e.relPath) ? 'checked' : ''} onclick="event.stopPropagation();toggleSelComparador('${lado}', ${JSON.stringify(e.relPath)})">
+        <span class="track-title" style="flex:1;font-size:12px">${e.relPath}</span>
+        <span style="font-size:11px;color:var(--text3);white-space:nowrap">${fmtBytesComparador(e.size)}</span>
+      </div>`).join('')}
+    </div>
+  `;
+}
+
+function renderComparador() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="content-header">
+      <div style="font-weight:600">🔀 Comparador de carpetas</div>
+    </div>
+    <div style="padding:16px;overflow-y:auto;height:calc(100% - 50px)">
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Elige dos carpetas (con sus subcarpetas incluidas) y compáralas para ver qué te falta en cada lado.</p>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+        <button class="btn" onclick="elegirCarpetaComparador('a')">📁 Carpeta A: ${cmpNombreA || 'elegir...'}</button>
+        <button class="btn" onclick="elegirCarpetaComparador('b')">📁 Carpeta B: ${cmpNombreB || 'elegir...'}</button>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:14px;font-size:12px">
+        <label>Comparar por:
+          <select onchange="cambiarBasisComparador(this.value)" ${cmpScanning ? 'disabled' : ''}>
+            <option value="namesize" ${cmpBasis === 'namesize' ? 'selected' : ''}>Nombre + tamaño (rápido)</option>
+            <option value="name" ${cmpBasis === 'name' ? 'selected' : ''}>Solo nombre de archivo</option>
+            <option value="hash" ${cmpBasis === 'hash' ? 'selected' : ''}>Contenido exacto (lento)</option>
+          </select>
+        </label>
+        <label>Al mover/copiar:
+          <select onchange="cambiarEstructuraComparador(this.value)">
+            <option value="recrear" ${cmpEstructura === 'recrear' ? 'selected' : ''}>Recrear su subcarpeta en destino</option>
+            <option value="plano" ${cmpEstructura === 'plano' ? 'selected' : ''}>Todo a la raíz del destino</option>
+          </select>
+        </label>
+        <button class="btn btn-accent" ${(!cmpDirA || !cmpDirB || cmpScanning) ? 'disabled' : ''} onclick="ejecutarComparacion()">🔍 Comparar</button>
+      </div>
+
+      ${cmpScanning ? `<p style="font-size:12px;color:var(--text3)">Escaneando... A: ${cmpScanCount.a} archivo(s) · B: ${cmpScanCount.b} archivo(s)</p>` : ''}
+      ${cmpBusy ? `<p style="font-size:12px;color:var(--accent)">${cmpBusyMsg}</p>` : ''}
+      ${cmpError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${cmpError}</p>` : ''}
+
+      ${cmpResults ? `
+        <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+          Solo en A: <b>${cmpResults.soloA.length}</b> · Solo en B: <b>${cmpResults.soloB.length}</b> · En ambos: <b>${cmpResults.enAmbos.length}</b>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <div class="d-section" style="margin-bottom:6px">Solo en "${cmpNombreA}"</div>
+            ${renderListaComparador('a')}
+          </div>
+          <div>
+            <div class="d-section" style="margin-bottom:6px">Solo en "${cmpNombreB}"</div>
+            ${renderListaComparador('b')}
+          </div>
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -3051,6 +3324,7 @@ function renderView() {
   if (view === 'auditoria') { renderAuditoria(); return; }
   if (view === 'auditoriadigital') { renderAuditoriaDigital(); return; }
   if (view === 'explorador') { renderExplorador(); return; }
+  if (view === 'comparador') { renderComparador(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
