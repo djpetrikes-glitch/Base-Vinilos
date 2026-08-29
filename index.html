@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.110 — Dj Petrik</title>
+<title>VinylBase v2.111 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.110</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.111</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -264,6 +264,10 @@
     <button class="nav-item" id="nav-auditoriadigital" onclick="setView('auditoriadigital')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M11 8v3l2 2"/></svg>
       Verificar digital
+    </button>
+    <button class="nav-item" id="nav-explorador" onclick="setView('explorador')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      Explorador
     </button>
     <div class="nav-section">DJ</div>
     <button class="nav-item" id="nav-sesiones" onclick="setView('sesiones')">
@@ -2361,6 +2365,146 @@ function renderAuditoriaResultados(r) {
   `;
 }
 
+// ─── EXPLORADOR DE ARCHIVOS (navegar las carpetas ya conectadas, como un mini explorador) ──
+let explorerRootHandle = null;   // qué carpeta raíz estás explorando ahora mismo
+let explorerStack = [];          // [{name, handle}, ...] desde la raíz hasta donde estás
+let explorerEntries = null;      // null = aún sin cargar; {carpetas:[], archivos:[]} ya cargado
+let explorerLoading = false;
+let explorerPlayingUrl = null;   // URL del objeto del audio que se está reproduciendo ahora
+
+async function elegirRaizExplorador(cual) {
+  let handle = null;
+  if (cual === 'root') handle = rootDirHandle;
+  else if (cual === 'music1') handle = musicDirHandle;
+  else if (cual === 'music2') handle = musicDirHandle2;
+  else if (cual === 'cortadorOut') handle = cortadorOutDirHandle;
+  else if (cual === 'otra') {
+    try { handle = await window.showDirectoryPicker(); } catch(e) { return; }
+  }
+  if (!handle) { showToast('⚠ Esa carpeta no está conectada — ve a Configuración primero', true); return; }
+  explorerRootHandle = handle;
+  explorerStack = [{ name: handle.name, handle }];
+  await cargarEntradasExplorador();
+}
+
+function cambiarCarpetaExplorador() {
+  if (explorerPlayingUrl) { URL.revokeObjectURL(explorerPlayingUrl); explorerPlayingUrl = null; }
+  explorerRootHandle = null;
+  explorerStack = [];
+  explorerEntries = null;
+  renderExplorador();
+}
+
+async function cargarEntradasExplorador() {
+  explorerLoading = true;
+  explorerEntries = null;
+  renderExplorador();
+  try {
+    const dirActual = explorerStack[explorerStack.length - 1].handle;
+    const carpetas = [], archivos = [];
+    for await (const [name, handle] of dirActual.entries()) {
+      if (handle.kind === 'directory') {
+        carpetas.push({ name, handle });
+      } else {
+        let size = 0;
+        try { const f = await handle.getFile(); size = f.size; } catch(e) { /* no pasa nada, se queda en 0 */ }
+        archivos.push({ name, handle, size });
+      }
+    }
+    carpetas.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    archivos.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    explorerEntries = { carpetas, archivos };
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ Error leyendo la carpeta: ' + e.message, true);
+    explorerEntries = { carpetas: [], archivos: [] };
+  }
+  explorerLoading = false;
+  renderExplorador();
+}
+
+async function navegarExplorerPorIndice(i) {
+  const e = explorerEntries.carpetas[i];
+  if (!e) return;
+  explorerStack.push({ name: e.name, handle: e.handle });
+  await cargarEntradasExplorador();
+}
+
+async function irANivelExplorador(idx) {
+  explorerStack = explorerStack.slice(0, idx + 1);
+  await cargarEntradasExplorador();
+}
+
+function esAudioExplorador(name) {
+  return /\.(wav|mp3|flac|m4a|aac|ogg)$/i.test(name);
+}
+
+function fmtBytesExplorador(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+async function reproducirArchivoExplorerPorIndice(i) {
+  const e = explorerEntries.archivos[i];
+  if (!e) return;
+  try {
+    const file = await e.handle.getFile();
+    if (explorerPlayingUrl) URL.revokeObjectURL(explorerPlayingUrl);
+    explorerPlayingUrl = URL.createObjectURL(file);
+    renderExplorador();
+    requestAnimationFrame(() => { document.getElementById('explorer-audio')?.play(); });
+  } catch(e) {
+    console.error(e);
+    showToast('⚠ No se pudo abrir el archivo', true);
+  }
+}
+
+function renderExplorador() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="content-header">
+      <div style="font-weight:600">📁 Explorador de archivos</div>
+    </div>
+    <div style="padding:16px;overflow-y:auto;height:calc(100% - 50px)">
+      ${!explorerRootHandle ? `
+        <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Elige qué carpeta quieres explorar — reutiliza alguna ya conectada, o abre otra distinta:</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${rootDirHandle ? `<button class="btn" onclick="elegirRaizExplorador('root')">📁 ${rootDirHandle.name} (Vinilos)</button>` : ''}
+          ${musicDirHandle ? `<button class="btn" onclick="elegirRaizExplorador('music1')">📁 ${musicDirHandle.name} (Música 1)</button>` : ''}
+          ${musicDirHandle2 ? `<button class="btn" onclick="elegirRaizExplorador('music2')">📁 ${musicDirHandle2.name} (Música 2)</button>` : ''}
+          ${cortadorOutDirHandle ? `<button class="btn" onclick="elegirRaizExplorador('cortadorOut')">📁 ${cortadorOutDirHandle.name} (Salida del Cortador)</button>` : ''}
+          <button class="btn btn-accent" onclick="elegirRaizExplorador('otra')">📂 Elegir otra carpeta...</button>
+        </div>
+      ` : `
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;flex-wrap:wrap;font-size:12px">
+          <button class="btn" style="font-size:11px;padding:3px 8px" onclick="cambiarCarpetaExplorador()">🏠 Cambiar carpeta</button>
+          ${explorerStack.map((s, i) => `<span style="color:var(--text3)">/</span><span style="cursor:pointer;padding:2px 4px;${i===explorerStack.length-1?'color:var(--accent);font-weight:600':'color:var(--text2)'}" onclick="irANivelExplorador(${i})">${s.name}</span>`).join('')}
+        </div>
+
+        ${explorerPlayingUrl ? `<audio id="explorer-audio" controls autoplay src="${explorerPlayingUrl}" style="width:100%;margin-bottom:12px"></audio>` : ''}
+
+        ${explorerLoading ? '<p style="font-size:12px;color:var(--text3)">Cargando...</p>' : `
+        <div class="tracklist">
+          ${(explorerEntries?.carpetas || []).map((e, i) => `<div class="track-row" style="cursor:pointer" onclick="navegarExplorerPorIndice(${i})">
+            <span style="margin-right:8px">📁</span>
+            <span class="track-title" style="flex:1">${e.name}</span>
+          </div>`).join('')}
+          ${(explorerEntries?.archivos || []).map((e, i) => `<div class="track-row">
+            <span style="margin-right:8px">${esAudioExplorador(e.name) ? '🎵' : '📄'}</span>
+            <span class="track-title" style="flex:1">${e.name}</span>
+            <span style="font-size:11px;color:var(--text3);margin-right:8px;white-space:nowrap">${fmtBytesExplorador(e.size)}</span>
+            ${esAudioExplorador(e.name) ? `<button class="btn" style="font-size:11px;padding:3px 8px" onclick="reproducirArchivoExplorerPorIndice(${i})">▶</button>` : ''}
+          </div>`).join('')}
+          ${explorerEntries && explorerEntries.carpetas.length === 0 && explorerEntries.archivos.length === 0 ? '<p style="font-size:12px;color:var(--text3);padding:10px">Carpeta vacía</p>' : ''}
+        </div>
+        `}
+      `}
+    </div>
+  `;
+}
+
 // ─── VERIFICAR DIGITAL (comparar discos digitales del Sheet contra tu carpeta de música) ──
 // Igual que "Verificar ripeados" pero para lo que NO es vinilo físico: usa el mismo índice
 // de etiquetas ID3 que ya usa "¿Tengo este tema?", así que reconoce los archivos igual de
@@ -2810,7 +2954,12 @@ function isVinyl(row) {
   const fmt = g(row, COL.format).toLowerCase();
   const fuente = g(row, COL.fuente).toLowerCase();
   const isPhysical = fmt.includes('12"') || fmt.includes('7"') || fmt.includes('10"') || fuente === 'discogs';
-  return isPhysical;
+  // Si has confirmado el estado digital ("✓ Tengo"), para ti eso significa específicamente
+  // que este disco en realidad nunca fue vinilo — se dio de alta mal en Discogs hace tiempo.
+  // No lo trates como vinilo en ningún sitio de la app, para que deje de confundir en la
+  // vista de Vinilos/Todos.
+  const confirmadoDigital = g(row, COL.digital_estado).toLowerCase() === 'confirmado';
+  return isPhysical && !confirmadoDigital;
 }
 
 function isDigital(row) {
@@ -2901,6 +3050,7 @@ function renderView() {
   if (view === 'cortador') { renderCortador(); return; }
   if (view === 'auditoria') { renderAuditoria(); return; }
   if (view === 'auditoriadigital') { renderAuditoriaDigital(); return; }
+  if (view === 'explorador') { renderExplorador(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
