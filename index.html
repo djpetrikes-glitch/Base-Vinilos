@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.130 — Dj Petrik</title>
+<title>VinylBase v2.131 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.130</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.131</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3044,6 +3044,10 @@ let normSel = new Set();
 let normError = null;
 let normBusy = false;
 let normBusyMsg = '';
+let normCacheCarpetas = null;   // Map nombreCarpeta -> { catalogNorm, archivos } — evita re-escanear la Carpeta raíz en cada búsqueda
+let normCacheParaHandle = null; // qué rootDirHandle corresponde a la caché de arriba
+let normCacheNoLeidos = [];
+let normCacheFecha = null;
 
 async function escanearCarpetaNormalizados(dirHandle, prefix, out) {
   for await (const [name, handle] of dirHandle.entries()) {
@@ -3119,55 +3123,70 @@ function leerFramesId3(id3Buffer) {
 // mete estos frames. Devuelve {title, catalog} normalizados, o vacíos si no hay etiqueta.
 async function leerTagsNormalizados(entry) {
   const file = await entry.handle.getFile();
-  if (!/\.wav$/i.test(entry.name)) return { title: '', catalog: '' };
+  if (!/\.wav$/i.test(entry.name)) return { title: '', catalog: '', catalogRaw: '' };
   const buf = await file.arrayBuffer();
   const info = leerChunkWav(buf);
-  if (!info.id3Buffer) return { title: normName(info.title), catalog: '' }; // solo RIFF/INFO nativo, sin catálogo
+  if (!info.id3Buffer) return { title: normName(info.title), catalog: '', catalogRaw: '' }; // solo RIFF/INFO nativo, sin catálogo
   const frames = leerFramesId3(info.id3Buffer);
-  return { title: normName(frames['TIT2']), catalog: normName(frames['TXXX:CATALOGNUMBER']) };
+  const catalogRaw = frames['TXXX:CATALOGNUMBER'] || '';
+  return { title: normName(frames['TIT2']), catalog: normName(catalogRaw), catalogRaw };
 }
 
-async function ejecutarBusquedaNormalizados() {
+// Escanea y agrupa la Carpeta raíz UNA sola vez por sesión — con 250+ carpetas (y subiendo
+// hacia 1000+), releer todo en cada búsqueda no tiene sentido si la carpeta raíz no ha
+// cambiado. Solo se vuelve a hacer si cambias de Carpeta raíz o pulsas "Recontar" a mano.
+async function obtenerCarpetasDeRootConCache(forzar) {
+  if (!forzar && normCacheCarpetas && normCacheParaHandle === rootDirHandle) {
+    return { carpetas: normCacheCarpetas, noLeidos: normCacheNoLeidos, deCache: true };
+  }
+  const enRoot = [];
+  await escanearCarpetaNormalizados(rootDirHandle, '', enRoot);
+  normKeyTotal = enRoot.length;
+  normKeyDone = 0;
+  renderNormalizados();
+
+  const carpetas = new Map(); // nombreCarpeta -> { catalogNorm, archivos: [...] }
+  const noLeidos = [];
+  for (const e of enRoot) {
+    const nombreCarpeta = e.relPath.split('/')[0];
+    if (!carpetas.has(nombreCarpeta)) {
+      const m = nombreCarpeta.match(/^\(([^)]+)\)/);
+      carpetas.set(nombreCarpeta, { catalogNorm: m ? normName(m[1]) : '', archivos: [] });
+    }
+    const grupo = carpetas.get(nombreCarpeta);
+    try {
+      const tags = await leerTagsNormalizados(e);
+      grupo.archivos.push({ ...e, titleNorm: tags.title });
+    } catch(err) {
+      console.error('[Normalizados] no se pudo leer', e.relPath, err);
+      grupo.archivos.push({ ...e, titleNorm: null });
+      noLeidos.push({ relPath: e.relPath, motivo: explicarErrorLecturaNormalizados(err) });
+    }
+    normKeyDone++;
+    if (normKeyDone % 15 === 0) renderNormalizados();
+  }
+
+  normCacheCarpetas = carpetas;
+  normCacheParaHandle = rootDirHandle;
+  normCacheNoLeidos = noLeidos;
+  normCacheFecha = new Date();
+  return { carpetas, noLeidos, deCache: false };
+}
+
+async function ejecutarBusquedaNormalizados(forzarRecuento) {
   if (!rootDirHandle) { showToast('⚠ No tienes la Carpeta raíz conectada — ve a Configuración', true); return; }
   if (!normDirHandle) { showToast('⚠ Elige antes la carpeta de normalizados', true); return; }
   normScanning = true; normError = null; normResults = null; normSel.clear();
   normKeyPhase = false; normKeyDone = 0; normKeyTotal = 0;
   renderNormalizados();
   try {
-    const enRoot = [], normalizados = [];
-    await escanearCarpetaNormalizados(rootDirHandle, '', enRoot);
-    await escanearCarpetaNormalizados(normDirHandle, '', normalizados);
-
     normKeyPhase = true;
-    normKeyTotal = enRoot.length + normalizados.length;
-    renderNormalizados();
+    const { carpetas, noLeidos: noLeidosRoot } = await obtenerCarpetasDeRootConCache(forzarRecuento);
 
-    // Agrupamos por carpeta de vinilo (primer trozo de la ruta relativa). El catálogo de
-    // cada carpeta sale del propio NOMBRE de la carpeta — "(CATALOGO) Artista - Título",
-    // así la crea buildDiscFolderName — sin necesidad de leer ningún archivo para eso.
-    // Solo leemos etiquetas para saber el título de cada pista (para acotar el archivo
-    // exacto dentro de la carpeta ya localizada). Un archivo que no se puede leer no debe
-    // tirar abajo la búsqueda entera — se salta y se sigue con el resto.
-    const carpetas = new Map(); // nombreCarpeta -> { catalogNorm, archivos: [...] }
-    const noLeidosRoot = [];
-    for (const e of enRoot) {
-      const nombreCarpeta = e.relPath.split('/')[0];
-      if (!carpetas.has(nombreCarpeta)) {
-        const m = nombreCarpeta.match(/^\(([^)]+)\)/);
-        carpetas.set(nombreCarpeta, { catalogNorm: m ? normName(m[1]) : '', archivos: [] });
-      }
-      const grupo = carpetas.get(nombreCarpeta);
-      try {
-        const tags = await leerTagsNormalizados(e);
-        grupo.archivos.push({ ...e, titleNorm: tags.title });
-      } catch(err) {
-        console.error('[Normalizados] no se pudo leer', e.relPath, err);
-        grupo.archivos.push({ ...e, titleNorm: null });
-        noLeidosRoot.push({ relPath: e.relPath, motivo: explicarErrorLecturaNormalizados(err) });
-      }
-      normKeyDone++;
-      if (normKeyDone % 15 === 0) renderNormalizados();
-    }
+    const normalizados = [];
+    await escanearCarpetaNormalizados(normDirHandle, '', normalizados);
+    normKeyTotal = normKeyDone + normalizados.length; // la parte de root ya contada; sumamos lo nuevo
+    renderNormalizados();
 
     // Catálogo -> carpeta(s) cuyo nombre empieza por ese catálogo (normalmente 1)
     const mapaCatalogo = new Map();
@@ -3192,9 +3211,9 @@ async function ejecutarBusquedaNormalizados() {
       normKeyDone++;
       if (normKeyDone % 15 === 0) renderNormalizados();
 
-      if (!tagsNrm.catalog) { sinPareja.push({ ...nrm, motivo: 'este archivo no tiene etiqueta de catálogo (CATALOGNUMBER)' }); continue; }
+      if (!tagsNrm.catalogRaw) { sinPareja.push({ ...nrm, motivo: 'este archivo no tiene ninguna etiqueta de catálogo (CATALOGNUMBER) detectable' }); continue; }
       const candidatosCarpeta = mapaCatalogo.get(tagsNrm.catalog) || [];
-      if (candidatosCarpeta.length === 0) { sinPareja.push({ ...nrm, motivo: `su catálogo no coincide con el de ninguna carpeta` }); continue; }
+      if (candidatosCarpeta.length === 0) { sinPareja.push({ ...nrm, motivo: `catálogo detectado: "${tagsNrm.catalogRaw}" — no coincide con el de ninguna carpeta` }); continue; }
       if (candidatosCarpeta.length > 1) {
         ambiguos.push({ origen: nrm, candidatos: candidatosCarpeta.map(c => c.nombreCarpeta) });
         continue;
@@ -3208,11 +3227,12 @@ async function ejecutarBusquedaNormalizados() {
       }
     }
 
+    const enRootPlano = [...carpetas.values()].flatMap(g => g.archivos);
     listos.sort((a, b) => a.origen.name.localeCompare(b.origen.name, 'es'));
     sinPareja.sort((a, b) => a.name.localeCompare(b.name, 'es'));
-    enRoot.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
+    enRootPlano.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
     normalizados.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
-    normResults = { listos, ambiguos, revisar, sinPareja, enRoot, normalizados, noLeidosRoot };
+    normResults = { listos, ambiguos, revisar, sinPareja, enRoot: enRootPlano, normalizados, noLeidosRoot };
     normSel = new Set(listos.map(m => m.origen.relPath)); // pre-marcados: es el caso normal, no ambiguo
   } catch(e) {
     console.error('[Normalizados] error', e);
@@ -3280,7 +3300,9 @@ function renderNormalizados() {
         <button class="btn" onclick="pickNormalizadosDir()">🎚️ Carpeta de normalizados: ${normDirHandle ? normDirHandle.name : 'elegir...'}</button>
         ${normDirHandle && !normGranted ? `<button class="btn btn-accent" onclick="reconnectDir('normalizados')">🔄 Reconectar</button>` : ''}
         <button class="btn btn-accent" ${(!rootDirHandle || !normDirHandle || normScanning) ? 'disabled' : ''} onclick="ejecutarBusquedaNormalizados()">🔍 Buscar coincidencias</button>
+        ${normCacheParaHandle === rootDirHandle && normCacheCarpetas ? `<button class="btn" style="font-size:11px" ${normScanning ? 'disabled' : ''} onclick="ejecutarBusquedaNormalizados(true)" title="Solo hace falta si has creado o cambiado carpetas nuevas desde la última vez">🔄 Recontar Carpeta raíz</button>` : ''}
       </div>
+      ${normCacheParaHandle === rootDirHandle && normCacheCarpetas ? `<p style="font-size:11px;color:var(--text3);margin:-8px 0 10px">📦 Carpeta raíz en caché (${normCacheCarpetas.size} carpetas, contadas ${normCacheFecha ? normCacheFecha.toLocaleTimeString('es') : ''}) — "Buscar coincidencias" ya no la vuelve a recorrer entera, solo si pulsas "Recontar".</p>` : ''}
 
       ${normScanning && !normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Escaneando carpetas...</p>` : ''}
       ${normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Leyendo etiquetas... ${normKeyDone}/${normKeyTotal}</p>` : ''}
