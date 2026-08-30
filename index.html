@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.133 — Dj Petrik</title>
+<title>VinylBase v2.134 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.133</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.134</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3400,6 +3400,30 @@ async function onDropCarpetaNormalizados(event, nombreCarpeta) {
   renderNormalizados();
 }
 
+// Para "a revisar": la carpeta ya está localizada (por catálogo), solo falta decir con qué
+// archivo exacto se queda — un botón por candidato, sin necesidad de arrastrar nada.
+async function aplicarRevisarNormalizados(origenRelPath, nombreCarpeta, nombreArchivoDestino) {
+  const entry = normResults?.revisar.find(r => r.origen.relPath === origenRelPath)?.origen;
+  if (!entry) return;
+  if (!confirm(`Vas a pegar "${entry.name}" como "${nombreArchivoDestino}" dentro de "${nombreCarpeta}", sobrescribiendo lo que hubiera ahí.\n\n¿Seguro?`)) return;
+  try {
+    const destinoDir = await rootDirHandle.getDirectoryHandle(nombreCarpeta);
+    const file = await entry.handle.getFile();
+    const buf = await file.arrayBuffer();
+    const destinoFile = await destinoDir.getFileHandle(nombreArchivoDestino, { create: true });
+    const writable = await destinoFile.createWritable();
+    await writable.write(buf);
+    await writable.close();
+    await entry.parentHandle.removeEntry(entry.name);
+    showToast(`✓ Aplicado: ${entry.name} → ${nombreCarpeta}/${nombreArchivoDestino}`);
+    normResults.revisar = normResults.revisar.filter(r => r.origen.relPath !== origenRelPath);
+    renderNormalizados();
+  } catch(e) {
+    console.error('[Normalizados revisar] error', e);
+    showToast('⚠ Error aplicando: ' + e.message, true);
+  }
+}
+
 function renderNormalizados() {
   const main = document.getElementById('main-content');
   main.innerHTML = `
@@ -3452,11 +3476,14 @@ function renderNormalizados() {
         `}
 
         ${normResults.revisar.length ? `
-          <div class="d-section" style="margin-bottom:6px">🔎 A revisar (se encontró la carpeta por álbum, pero no una única pista por título)</div>
+          <div class="d-section" style="margin-bottom:6px">🔎 A revisar (se encontró la carpeta por catálogo, pero no una única pista por título — pulsa a cuál corresponde)</div>
           <div class="tracklist" style="margin-bottom:20px">
             ${normResults.revisar.map(r => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
               <span class="track-title" style="font-size:12px">${r.origen.name}</span>
-              <span style="font-size:11px;color:var(--text3)">carpeta: ${r.carpeta} — archivos ahí: ${r.archivosDeLaCarpeta.map(a => a.name).join(' · ')}</span>
+              <span style="font-size:11px;color:var(--text3);margin-bottom:4px">carpeta encontrada: ${r.carpeta}</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                ${r.archivosDeLaCarpeta.map(a => `<button class="btn" style="font-size:11px;padding:3px 8px" onclick="aplicarRevisarNormalizados(${JSON.stringify(r.origen.relPath)}, ${JSON.stringify(r.carpeta)}, ${JSON.stringify(a.name)})">→ ${a.name}</button>`).join('')}
+              </div>
             </div>`).join('')}
           </div>
         ` : ''}
