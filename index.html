@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.132 — Dj Petrik</title>
+<title>VinylBase v2.133 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.132</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.133</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3139,41 +3139,57 @@ async function leerTagsNormalizados(entry) {
 // hacia 1000+), releer todo en cada búsqueda no tiene sentido si la carpeta raíz no ha
 // cambiado. Solo se vuelve a hacer si cambias de Carpeta raíz o pulsas "Recontar" a mano.
 async function obtenerCarpetasDeRootConCache(forzar) {
-  if (!forzar && normCacheCarpetas && normCacheParaHandle === rootDirHandle) {
-    return { carpetas: normCacheCarpetas, noLeidos: normCacheNoLeidos, deCache: true };
+  const mismoHandle = normCacheParaHandle === rootDirHandle;
+  if (forzar || !mismoHandle) {
+    normCacheCarpetas = new Map();
+    normCacheNoLeidos = [];
   }
-  const enRoot = [];
-  await escanearCarpetaNormalizados(rootDirHandle, '', enRoot);
-  normKeyTotal = enRoot.length;
-  normKeyDone = 0;
-  renderNormalizados();
-
-  const carpetas = new Map(); // nombreCarpeta -> { catalogNorm, archivos: [...] }
-  const noLeidos = [];
-  for (const e of enRoot) {
-    const nombreCarpeta = e.relPath.split('/')[0];
-    if (!carpetas.has(nombreCarpeta)) {
-      const m = nombreCarpeta.match(/^\(([^)]+)\)/);
-      carpetas.set(nombreCarpeta, { catalogNorm: m ? normName(m[1]) : '', archivos: [] });
-    }
-    const grupo = carpetas.get(nombreCarpeta);
-    try {
-      const tags = await leerTagsNormalizados(e);
-      grupo.archivos.push({ ...e, titleNorm: tags.title });
-    } catch(err) {
-      console.error('[Normalizados] no se pudo leer', e.relPath, err);
-      grupo.archivos.push({ ...e, titleNorm: null });
-      noLeidos.push({ relPath: e.relPath, motivo: explicarErrorLecturaNormalizados(err) });
-    }
-    normKeyDone++;
-    if (normKeyDone % 15 === 0) renderNormalizados();
-  }
-
-  normCacheCarpetas = carpetas;
   normCacheParaHandle = rootDirHandle;
-  normCacheNoLeidos = noLeidos;
+
+  // Listado rápido, un solo nivel, SIN leer ningún archivo — solo para saber qué carpetas
+  // hay ahora mismo y comparar con lo que ya teníamos guardado.
+  const nombresActuales = new Set();
+  for await (const [name, handle] of rootDirHandle.entries()) {
+    if (handle.kind === 'directory') nombresActuales.add(name);
+  }
+
+  // Las que ya no existen (renombradas o borradas) se quitan de la caché
+  for (const nombreCacheado of [...normCacheCarpetas.keys()]) {
+    if (!nombresActuales.has(nombreCacheado)) normCacheCarpetas.delete(nombreCacheado);
+  }
+
+  // Solo las carpetas NUEVAS desde la última vez se escanean de verdad — las que ya
+  // estaban en caché no se vuelven a tocar. Así, aunque sigas creando carpetas mientras
+  // trabajas, la próxima búsqueda las coge solas sin tener que recontar todo desde cero.
+  const nuevas = [...nombresActuales].filter(n => !normCacheCarpetas.has(n));
+  if (nuevas.length) {
+    normKeyDone = 0;
+    normKeyTotal = nuevas.length;
+    renderNormalizados();
+    for (const nombreCarpeta of nuevas) {
+      const dirHandle = await rootDirHandle.getDirectoryHandle(nombreCarpeta);
+      const enCarpeta = [];
+      await escanearCarpetaNormalizados(dirHandle, nombreCarpeta, enCarpeta);
+      const m = nombreCarpeta.match(/^\(([^)]+)\)/);
+      const grupo = { catalogNorm: m ? normName(m[1]) : '', archivos: [] };
+      for (const e of enCarpeta) {
+        try {
+          const tags = await leerTagsNormalizados(e);
+          grupo.archivos.push({ ...e, titleNorm: tags.title });
+        } catch(err) {
+          console.error('[Normalizados] no se pudo leer', e.relPath, err);
+          grupo.archivos.push({ ...e, titleNorm: null });
+          normCacheNoLeidos.push({ relPath: e.relPath, motivo: explicarErrorLecturaNormalizados(err) });
+        }
+      }
+      normCacheCarpetas.set(nombreCarpeta, grupo);
+      normKeyDone++;
+      renderNormalizados();
+    }
+  }
+
   normCacheFecha = new Date();
-  return { carpetas, noLeidos, deCache: false };
+  return { carpetas: normCacheCarpetas, noLeidos: normCacheNoLeidos, deCache: nuevas.length === 0 && !forzar };
 }
 
 async function ejecutarBusquedaNormalizados(forzarRecuento) {
@@ -3399,7 +3415,7 @@ function renderNormalizados() {
         <button class="btn btn-accent" ${(!rootDirHandle || !normDirHandle || normScanning) ? 'disabled' : ''} onclick="ejecutarBusquedaNormalizados()">🔍 Buscar coincidencias</button>
         ${normCacheParaHandle === rootDirHandle && normCacheCarpetas ? `<button class="btn" style="font-size:11px" ${normScanning ? 'disabled' : ''} onclick="ejecutarBusquedaNormalizados(true)" title="Solo hace falta si has creado o cambiado carpetas nuevas desde la última vez">🔄 Recontar Carpeta raíz</button>` : ''}
       </div>
-      ${normCacheParaHandle === rootDirHandle && normCacheCarpetas ? `<p style="font-size:11px;color:var(--text3);margin:-8px 0 10px">📦 Carpeta raíz en caché (${normCacheCarpetas.size} carpetas, contadas ${normCacheFecha ? normCacheFecha.toLocaleTimeString('es') : ''}) — "Buscar coincidencias" ya no la vuelve a recorrer entera, solo si pulsas "Recontar".</p>` : ''}
+      ${normCacheParaHandle === rootDirHandle && normCacheCarpetas ? `<p style="font-size:11px;color:var(--text3);margin:-8px 0 10px">📦 ${normCacheCarpetas.size} carpeta(s) en caché (última actualización ${normCacheFecha ? normCacheFecha.toLocaleTimeString('es') : ''}) — cada búsqueda detecta y añade sola las carpetas nuevas que hayas creado, sin releer las que ya tenía. "Recontar" fuerza a revisarlas todas desde cero.</p>` : ''}
 
       ${normScanning && !normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Escaneando carpetas...</p>` : ''}
       ${normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Leyendo etiquetas... ${normKeyDone}/${normKeyTotal}</p>` : ''}
