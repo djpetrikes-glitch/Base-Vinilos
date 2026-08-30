@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.119 — Dj Petrik</title>
+<title>VinylBase v2.120 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.119</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.120</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -463,6 +463,11 @@ async function restoreDirHandles() {
   if (co) cortadorOutDirHandle = co;
   const cf = await loadDirHandle('cortadorFile');
   if (cf) cortadorFileHandle = cf;
+  const ca = await loadDirHandle('colaAnadir');
+  if (ca) {
+    colaAnadirDirHandle = ca;
+    colaAnadirGranted = (await ca.queryPermission({ mode: 'readwrite' })) === 'granted';
+  }
 }
 
 async function reconnectDir(kind) {
@@ -470,6 +475,7 @@ async function reconnectDir(kind) {
     root:   { handle: rootDirHandle,   mode: 'readwrite' },
     music1: { handle: musicDirHandle,  mode: 'read' },
     music2: { handle: musicDirHandle2, mode: 'read' },
+    colaAnadir: { handle: colaAnadirDirHandle, mode: 'readwrite' },
   };
   const { handle, mode } = map[kind];
   if (!handle) return;
@@ -478,7 +484,8 @@ async function reconnectDir(kind) {
     if (perm === 'granted') {
       if (kind === 'root') rootDirGranted = true;
       else if (kind === 'music1') musicDirGranted = true;
-      else musicDir2Granted = true;
+      else if (kind === 'music2') musicDir2Granted = true;
+      else colaAnadirGranted = true;
       showToast('✓ Acceso reconectado: ' + handle.name);
     } else {
       showToast('⚠ No se concedió acceso', true);
@@ -599,6 +606,8 @@ async function getMusicDir2() {
 // ─── CORTADOR DE RIPS (detectar silencios y trocear el WAV grande) ─────────────
 let cortadorFileHandle = null;
 let cortadorOutDirHandle = null;
+let colaAnadirDirHandle = null;   // carpeta compartida donde se dejan los .json pendientes de guardar en el Sheet
+let colaAnadirGranted = false;
 let cortadorRunning = false;
 let cortadorLog = [];
 let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
@@ -678,6 +687,16 @@ async function pickCortadorOutDir() {
     cortadorOutDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
     await saveDirHandle('cortadorOut', cortadorOutDirHandle);
     renderCortador();
+  } catch(e) { /* selección cancelada */ }
+}
+
+async function pickColaAnadirDir() {
+  try {
+    colaAnadirDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    colaAnadirGranted = true;
+    await saveDirHandle('colaAnadir', colaAnadirDirHandle);
+    showToast('✓ Carpeta de cola conectada: ' + colaAnadirDirHandle.name);
+    if (view === 'config') renderConfig();
   } catch(e) { /* selección cancelada */ }
 }
 
@@ -3923,6 +3942,18 @@ function renderConfig() {
         </div>
       </div>
       <div class="config-section">
+        <h3>Carpeta de cola para añadir discos al Sheet</h3>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Cuando añades un disco nuevo, se guarda aquí en la app al momento y se deja un archivito en esta carpeta. Ejecuta el programa "Añadir a Sheet" cuando quieras para que se guarde de verdad en el Google Sheet.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" onclick="pickColaAnadirDir()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Elegir carpeta de cola
+          </button>
+          ${colaAnadirDirHandle && !colaAnadirGranted ? `<button class="btn btn-accent" onclick="reconnectDir('colaAnadir')">🔄 Reconectar</button>` : ''}
+          <span style="font-size:12px;color:var(--text3)">${colaAnadirDirHandle ? '📁 ' + colaAnadirDirHandle.name + (colaAnadirGranted ? '' : ' (pulsa Reconectar)') : 'Sin carpeta seleccionada'}</span>
+        </div>
+      </div>
+      <div class="config-section">
         <h3>Acciones</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn" onclick="reloadData()">Recargar datos del Sheet</button>
@@ -5046,57 +5077,35 @@ async function addRecord() {
     coverCache[releaseIdLimpio] = newRec.thumb;
   }
 
-  if (!row[COL.release_id]) {
-    showToast('✓ Disco añadido aquí — como no venía de una búsqueda en Discogs, no tiene release_id, así que no podré confirmar el guardado en el Sheet ni traer su carátula sola. Añádelo también a mano en el Sheet.', true);
+  await ponerEnColaParaSheet(row);
+}
+
+// El navegador no puede confirmar de verdad si Apps Script guardó la fila (no-cors no deja
+// leer la respuesta — por eso costaba tanto). En vez de pelear con eso, dejamos un archivito
+// en una carpeta compartida: el programa "Añadir a Sheet" (fuera del navegador, sin esa
+// limitación) la recoge, la manda de verdad, y te dice si ha ido bien o mal.
+async function ponerEnColaParaSheet(row) {
+  if (!colaAnadirDirHandle) {
+    showToast('⚠ Disco añadido aquí, pero no está en el Sheet — conecta la "Carpeta de cola" en Configuración y vuelve a añadirlo para que se guarde de verdad', true);
     return;
   }
-
-  showToast('Guardando en el Sheet...');
   try {
-    await addRowToSheet(row);
-    await new Promise(r => setTimeout(r, 1500));
-    let ok = await verifyRowAdded(row[COL.release_id]);
-    if (!ok) {
-      await addRowToSheet(row);
-      await new Promise(r => setTimeout(r, 1500));
-      ok = await verifyRowAdded(row[COL.release_id]);
-    }
-    if (ok) {
-      showToast('✓ Disco añadido y confirmado en el Sheet');
-    } else {
-      showToast('⚠ No se pudo confirmar el guardado en el Sheet — puede que tu Apps Script todavía no sepa añadir filas nuevas. Añádelo a mano por ahora, y dímelo para revisarlo.', true);
-    }
+    const nombreArchivo = `add_${row[COL.release_id] || Date.now()}_${Math.random().toString(36).slice(2, 7)}.json`;
+    const payload = {
+      artist: row[COL.artist],
+      title: row[COL.title],
+      releaseId: row[COL.release_id] || '',
+      row,
+      fecha: new Date().toISOString(),
+    };
+    const fh = await colaAnadirDirHandle.getFileHandle(nombreArchivo, { create: true });
+    const writable = await fh.createWritable();
+    await writable.write(JSON.stringify(payload, null, 2));
+    await writable.close();
+    showToast('✓ Disco añadido aquí y puesto en cola — ejecuta "Añadir a Sheet" cuando quieras para guardarlo de verdad');
   } catch(e) {
-    console.error(e);
-    showToast('⚠ Error guardando en el Sheet — añádelo a mano por ahora', true);
-  }
-}
-
-// ⚠ Igual que borrar: requiere que tu Apps Script reconozca action:'add' y añada una fila
-// nueva al final con estos 32 valores, en el mismo orden que COL — no lo puedo verificar
-// desde aquí, así que compruébalo la primera vez y dime si funciona o no.
-async function addRowToSheet(row) {
-  return fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify({
-      action: 'add',
-      row: row,
-    }),
-  });
-}
-
-async function verifyRowAdded(releaseId) {
-  if (!releaseId) return false;
-  try {
-    const res = await fetch(APPS_SCRIPT_URL, { method: 'GET' });
-    const json = await res.json();
-    if (!json.ok) return false;
-    const dataRows = json.data.slice(1);
-    return dataRows.some(r => String(r[COL.release_id] ?? '').trim() === String(releaseId).trim());
-  } catch(e) {
-    return false;
+    console.error('[Cola añadir] error', e);
+    showToast('⚠ Disco añadido aquí, pero no se pudo dejar en la cola (' + e.message + ') — revisa el permiso de esa carpeta en Configuración', true);
   }
 }
 
