@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.137 — Dj Petrik</title>
+<title>VinylBase v2.138 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.137</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.138</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -883,6 +883,19 @@ function detectSegments(envelope, windowMs, thresholdInfo, minSilenceSec, totalD
     } else i++;
   }
 
+  const winSec = windowMs / 1000;
+
+  // Info de las zonas de SILENCIO detectadas (no solo el sonido) — con el nivel medio real
+  // que se ha medido ahí, para poder comparar directamente contra lo que se ve/oye en
+  // Audition, en vez de tener que confiar a ciegas en que el cálculo ha acertado.
+  const silenceRegionsInfo = silenceRegions.map(([s, e]) => {
+    let sum = 0;
+    for (let k = s; k < e; k++) sum += envelope[k];
+    const avgLinear = sum / (e - s);
+    const avgDb = avgLinear > 0 ? 20 * Math.log10(avgLinear) : -Infinity;
+    return { startSec: s * winSec, endSec: e * winSec, avgDb };
+  });
+
   const segments = [];
   let cursor = 0;
   for (const [s, e] of silenceRegions) {
@@ -891,10 +904,12 @@ function detectSegments(envelope, windowMs, thresholdInfo, minSilenceSec, totalD
   }
   if (cursor < envelope.length) segments.push([cursor, envelope.length]);
 
-  const winSec = windowMs / 1000;
-  return segments
-    .map(([s, e]) => ({ startSec: s * winSec, endSec: Math.min(totalDurationSec, e * winSec) }))
-    .filter(seg => (seg.endSec - seg.startSec) > 3); // ignora restos de menos de 3s (no son canciones)
+  return {
+    segments: segments
+      .map(([s, e]) => ({ startSec: s * winSec, endSec: Math.min(totalDurationSec, e * winSec) }))
+      .filter(seg => (seg.endSec - seg.startSec) > 3), // ignora restos de menos de 3s (no son canciones)
+    silenceRegionsInfo,
+  };
 }
 
 function writeWavStr(view, offset, str) {
@@ -1470,7 +1485,7 @@ function rescueLongSegment(seg, envelope, windowMs, minTrackSec, maxTrackSec, no
   for (const marginDb of [6, 9, 12, 16, 20, 25]) {
     for (const minSil of [0.6, 0.3]) {
       const dbTry = computeAdaptiveThresholdDb(subEnv, marginDb);
-      const subSegs = detectSegments(subEnv, windowMs, dbTry, minSil, durationSec);
+      const { segments: subSegs } = detectSegments(subEnv, windowMs, dbTry, minSil, durationSec);
       if (subSegs.length > 1) { rescued = subSegs; break outer; }
     }
   }
@@ -1701,7 +1716,8 @@ async function analyzeCortadorRaw() {
     thresholdInfo = manualThresholdDb;
     cortadorLogLine(`Umbral manual: ${manualThresholdDb} dB`);
   }
-  let segments = detectSegments(envelope, windowMs, thresholdInfo, minSilenceSec, totalDurationSec);
+  const { segments: detectedSegments, silenceRegionsInfo } = detectSegments(envelope, windowMs, thresholdInfo, minSilenceSec, totalDurationSec);
+  let segments = detectedSegments;
   const rawDetectedSegments = segments.map(s => ({ ...s })); // copia tal cual detectado, antes de fusiones/descartes — para la línea de tiempo
 
   if (!segments.length) {
@@ -1711,6 +1727,11 @@ async function analyzeCortadorRaw() {
 
   cortadorLogLine(`🔍 En bruto (antes de fusiones/rescates): ${segments.length} trozos:`);
   segments.forEach((s, i) => cortadorLogLine(`   ${i+1}. ${fmtDuration(s.startSec)} a ${fmtDuration(s.endSec)} (${fmtDuration(s.endSec - s.startSec)})`));
+
+  if (silenceRegionsInfo.length) {
+    cortadorLogLine(`🔇 Zonas consideradas silencio (${silenceRegionsInfo.length}), con el nivel real medido ahí — compara este dB contra lo que veas en Audition:`);
+    silenceRegionsInfo.forEach((r, i) => cortadorLogLine(`   ${i+1}. ${fmtDuration(r.startSec)} a ${fmtDuration(r.endSec)} — nivel medido: ${r.avgDb === -Infinity ? '-∞' : r.avgDb.toFixed(1)} dB`));
+  }
 
   // Si conocemos duraciones reales de Discogs, ensanchar el rango min/max para que
   // no fusione ni rescate temas que ya sabemos que son legítimamente cortos o largos.
@@ -1749,7 +1770,7 @@ async function analyzeCortadorRaw() {
     cortadorLogLine(`Se detectaron ${segments.length} trozos pero Discogs dice que hay ${expectedTracksPre.length} temas — reintentando con más sensibilidad...`);
     for (const marginDb of [6, 9, 12, 16]) {
       const dbTry = computeAdaptiveThresholdDb(envelope, marginDb);
-      const retry = detectSegments(envelope, windowMs, dbTry, Math.max(0.4, minSilenceSec * 0.4), totalDurationSec);
+      const { segments: retry } = detectSegments(envelope, windowMs, dbTry, Math.max(0.4, minSilenceSec * 0.4), totalDurationSec);
       if (retry.length > segments.length) {
         segments = retry;
         cortadorLogLine(`   Con más sensibilidad (${dbTry.toFixed(1)}dB) aparecen ${retry.length} trozos.`);
