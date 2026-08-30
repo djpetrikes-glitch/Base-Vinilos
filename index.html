@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.126 — Dj Petrik</title>
+<title>VinylBase v2.127 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.126</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.127</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3103,6 +3103,7 @@ async function ejecutarBusquedaNormalizados() {
     enRoot.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
     normalizados.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
     normResults = { listos, ambiguos, sinPareja, enRoot, normalizados };
+    normSel = new Set(listos.map(m => m.origen.relPath)); // pre-marcados: es el caso normal, no ambiguo
   } catch(e) {
     console.error('[Normalizados] error', e);
     normError = (e.name ? e.name + ': ' : '') + e.message;
@@ -3171,41 +3172,29 @@ function renderNormalizados() {
       </div>
 
       ${normScanning ? `<p style="font-size:12px;color:var(--text3)">Escaneando...</p>` : ''}
-      ${normBusy ? `<p style="font-size:12px;color:var(--accent)">${normBusyMsg}</p>` : ''}
       ${normError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${normError}</p>` : ''}
 
       ${normResults ? `
-        <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
-          Encontrados en la Carpeta raíz: <b>${normResults.enRoot.length}</b> · En normalizados: <b>${normResults.normalizados.length}</b> · Listos: <b>${normResults.listos.length}</b> · Ambiguos: <b>${normResults.ambiguos.length}</b> · Sin pareja: <b>${normResults.sinPareja.length}</b>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
+          Encontrados: <b>${normResults.enRoot.length}</b> en la Carpeta raíz · <b>${normResults.normalizados.length}</b> en normalizados
+          ${normResults.ambiguos.length ? ` · <b style="color:var(--accent)">${normResults.ambiguos.length} ambiguo(s)</b>` : ''}
+          ${normResults.sinPareja.length ? ` · <b style="color:var(--accent)">${normResults.sinPareja.length} sin pareja</b>` : ''}
         </div>
 
-        <details style="margin-bottom:16px">
-          <summary style="cursor:pointer;font-size:12px;color:var(--text2);margin-bottom:8px">📋 Ver TODOS los archivos encontrados (para revisar tú mismo)</summary>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
-            <div>
-              <div class="d-section" style="margin-bottom:6px">En la Carpeta raíz (${normResults.enRoot.length})</div>
-              <div class="tracklist" style="max-height:260px;overflow-y:auto">
-                ${normResults.enRoot.map(e => `<div class="track-row"><span class="track-title" style="font-size:11px;font-family:monospace">${e.relPath}</span></div>`).join('')}
-              </div>
-            </div>
-            <div>
-              <div class="d-section" style="margin-bottom:6px">En normalizados (${normResults.normalizados.length})</div>
-              <div class="tracklist" style="max-height:260px;overflow-y:auto">
-                ${normResults.normalizados.map(e => `<div class="track-row"><span class="track-title" style="font-size:11px;font-family:monospace">${e.relPath}</span></div>`).join('')}
-              </div>
-            </div>
-          </div>
-        </details>
-
-        <div class="d-section" style="margin-bottom:6px">✓ Listos para aplicar</div>
-        ${!normResults.listos.length ? '<p style="font-size:12px;color:var(--text3);padding:10px">Nada listo</p>' : `
-          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:11px">
+        ${!normResults.listos.length ? `
+          <p style="font-size:13px;color:var(--text3);padding:16px;text-align:center">No hay ningún archivo listo para aplicar todavía.</p>
+        ` : `
+          ${normBusy ? `<p style="font-size:13px;color:var(--accent);margin-bottom:10px">${normBusyMsg}</p>` : `
+            <button class="btn btn-accent" style="width:100%;justify-content:center;padding:12px;font-size:14px;margin-bottom:6px" ${!normSel.size ? 'disabled' : ''} onclick="aplicarNormalizadosSeleccionados()">
+              ✅ Aplicar ${normSel.size} archivo(s) — pegar en su carpeta y borrar de origen
+            </button>
+          `}
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;font-size:11px">
             <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosNormalizados(true)">Marcar todos (${normResults.listos.length})</button>
             <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosNormalizados(false)">Ninguno</button>
-            <span style="color:var(--text3)">${normSel.size} marcado(s)</span>
+            <span style="color:var(--text3)">Desmarca los que NO quieras aplicar ahora</span>
           </div>
-          <button class="btn btn-accent" style="font-size:11px;margin-bottom:8px" ${normBusy ? 'disabled' : ''} onclick="aplicarNormalizadosSeleccionados()">📋 Aplicar marcados (pegar y borrar de origen)</button>
-          <div class="tracklist" style="max-height:280px;overflow-y:auto;margin-bottom:16px">
+          <div class="tracklist" style="margin-bottom:20px">
             ${normResults.listos.map(m => `<div class="track-row" style="cursor:pointer" onclick="toggleSelNormalizados(${JSON.stringify(m.origen.relPath)})">
               <input type="checkbox" ${normSel.has(m.origen.relPath) ? 'checked' : ''} onclick="event.stopPropagation();toggleSelNormalizados(${JSON.stringify(m.origen.relPath)})">
               <span class="track-title" style="flex:1;font-size:12px">${m.origen.name} <span style="color:var(--text3)">→</span> ${m.destino.relPath}</span>
@@ -3215,7 +3204,7 @@ function renderNormalizados() {
 
         ${normResults.ambiguos.length ? `
           <div class="d-section" style="margin-bottom:6px">⚠ Ambiguos (mismo nombre en varias carpetas — resuélvelos a mano)</div>
-          <div class="tracklist" style="max-height:200px;overflow-y:auto;margin-bottom:16px">
+          <div class="tracklist" style="margin-bottom:20px">
             ${normResults.ambiguos.map(a => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
               <span class="track-title" style="font-size:12px">${a.origen.name}</span>
               <span style="font-size:11px;color:var(--text3)">podría ser: ${a.candidatos.map(c => c.relPath).join(' · ')}</span>
@@ -3225,13 +3214,31 @@ function renderNormalizados() {
 
         ${normResults.sinPareja.length ? `
           <div class="d-section" style="margin-bottom:6px">? Sin pareja (no encontrado en ninguna carpeta de vinilo)</div>
-          <div class="tracklist" style="max-height:200px;overflow-y:auto">
+          <div class="tracklist" style="margin-bottom:20px">
             ${normResults.sinPareja.map(e => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
               <span class="track-title" style="font-size:12px">${e.relPath}</span>
               ${e.posibleCoincidencia ? `<span style="font-size:11px;color:var(--accent)">⚠ posible coincidencia (nombre no idéntico, revisa acentos/símbolos): ${e.posibleCoincidencia}</span>` : ''}
             </div>`).join('')}
           </div>
         ` : ''}
+
+        <details>
+          <summary style="cursor:pointer;font-size:11px;color:var(--text3)">📋 Ver todos los archivos escaneados, sin filtrar (solo para revisar a mano)</summary>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
+            <div>
+              <div class="d-section" style="margin-bottom:6px">En la Carpeta raíz (${normResults.enRoot.length})</div>
+              <div class="tracklist">
+                ${normResults.enRoot.map(e => `<div class="track-row"><span class="track-title" style="font-size:11px;font-family:monospace">${e.relPath}</span></div>`).join('')}
+              </div>
+            </div>
+            <div>
+              <div class="d-section" style="margin-bottom:6px">En normalizados (${normResults.normalizados.length})</div>
+              <div class="tracklist">
+                ${normResults.normalizados.map(e => `<div class="track-row"><span class="track-title" style="font-size:11px;font-family:monospace">${e.relPath}</span></div>`).join('')}
+              </div>
+            </div>
+          </div>
+        </details>
       ` : ''}
     </div>
   `;
