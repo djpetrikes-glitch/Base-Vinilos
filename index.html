@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.127 — Dj Petrik</title>
+<title>VinylBase v2.128 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.127</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.128</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3036,7 +3036,10 @@ function renderComparador() {
 // pero solo. Como los nombres son "Artista - Título.wav", en la práctica son únicos por
 // tema, así que emparejar por nombre es seguro (mismo criterio que ya usa el Comparador).
 let normScanning = false;
-let normResults = null;   // { listos: [], ambiguos: [], sinPareja: [] }
+let normKeyPhase = false;
+let normKeyDone = 0;
+let normKeyTotal = 0;
+let normResults = null;   // { listos: [], ambiguos: [], revisar: [], sinPareja: [] }
 let normSel = new Set();
 let normError = null;
 let normBusy = false;
@@ -3056,45 +3059,84 @@ async function escanearCarpetaNormalizados(dirHandle, prefix, out) {
   }
 }
 
+// Emparejar por NOMBRE de archivo no era fiable: la carpeta se llama "(CAT) Artista -
+// Título del disco", pero cada pista dentro se llama "Artista de la pista - Título de la
+// pista.wav" — son nombres distintos por diseño, y Audition puede alterar más cosas al
+// guardar. En vez de eso, usamos las etiquetas que la propia app ya incrusta al cortar
+// (embedTagsInWav mete álbum y título en cada WAV): primero se localiza la CARPETA por
+// álbum (comparación sin acentos/símbolos, porque Discogs siempre añade algo de más), y
+// dentro de esa carpeta ya acotada, el ARCHIVO concreto por título de la pista.
+async function leerTagsNormalizados(entry) {
+  const file = await entry.handle.getFile();
+  if (/\.wav$/i.test(entry.name)) {
+    const buf = await file.arrayBuffer();
+    const info = leerChunkWav(buf);
+    if (info.id3Buffer) {
+      const tagsId3 = await readTags(new Blob([info.id3Buffer]));
+      if (tagsId3.title || tagsId3.album) return { title: normName(tagsId3.title), album: normName(tagsId3.album) };
+    }
+    return { title: normName(info.title), album: '' }; // el RIFF/INFO nativo no trae álbum
+  }
+  const tags = await readTags(file);
+  return { title: normName(tags.title), album: normName(tags.album) };
+}
+
 async function ejecutarBusquedaNormalizados() {
   if (!rootDirHandle) { showToast('⚠ No tienes la Carpeta raíz conectada — ve a Configuración', true); return; }
   if (!normDirHandle) { showToast('⚠ Elige antes la carpeta de normalizados', true); return; }
   normScanning = true; normError = null; normResults = null; normSel.clear();
+  normKeyPhase = false; normKeyDone = 0; normKeyTotal = 0;
   renderNormalizados();
   try {
     const enRoot = [], normalizados = [];
     await escanearCarpetaNormalizados(rootDirHandle, '', enRoot);
     await escanearCarpetaNormalizados(normDirHandle, '', normalizados);
 
-    // Mapa nombre -> lista de sitios donde existe ese nombre dentro de las carpetas de vinilos
-    const mapaRoot = new Map();
+    normKeyPhase = true;
+    normKeyTotal = enRoot.length + normalizados.length;
+    renderNormalizados();
+
+    // Agrupamos por carpeta de vinilo (primer trozo de la ruta relativa) y leemos las
+    // etiquetas de cada archivo para saber el álbum de esa carpeta y el título de cada pista.
+    const carpetas = new Map(); // nombreCarpeta -> { albumNorm, archivos: [...] }
     for (const e of enRoot) {
-      const clave = e.name.normalize('NFC').toLowerCase();
-      if (!mapaRoot.has(clave)) mapaRoot.set(clave, []);
-      mapaRoot.get(clave).push(e);
+      const nombreCarpeta = e.relPath.split('/')[0];
+      if (!carpetas.has(nombreCarpeta)) carpetas.set(nombreCarpeta, { albumNorm: '', archivos: [] });
+      const tags = await leerTagsNormalizados(e);
+      const grupo = carpetas.get(nombreCarpeta);
+      if (!grupo.albumNorm && tags.album) grupo.albumNorm = tags.album;
+      grupo.archivos.push({ ...e, titleNorm: tags.title });
+      normKeyDone++;
+      if (normKeyDone % 15 === 0) renderNormalizados();
     }
 
-    const listos = [], ambiguos = [], sinPareja = [];
+    // Álbum -> carpeta(s) cuyo álbum coincide (normalmente 1)
+    const mapaAlbum = new Map();
+    for (const [nombreCarpeta, grupo] of carpetas) {
+      if (!grupo.albumNorm) continue;
+      if (!mapaAlbum.has(grupo.albumNorm)) mapaAlbum.set(grupo.albumNorm, []);
+      mapaAlbum.get(grupo.albumNorm).push({ nombreCarpeta, grupo });
+    }
+
+    const listos = [], ambiguos = [], revisar = [], sinPareja = [];
     for (const nrm of normalizados) {
-      const candidatos = mapaRoot.get(nrm.name.normalize('NFC').toLowerCase()) || [];
-      if (candidatos.length === 0) sinPareja.push(nrm);
-      else if (candidatos.length === 1) listos.push({ origen: nrm, destino: candidatos[0] });
-      else ambiguos.push({ origen: nrm, candidatos });
-    }
+      const tagsNrm = await leerTagsNormalizados(nrm);
+      normKeyDone++;
+      if (normKeyDone % 15 === 0) renderNormalizados();
 
-    // Para lo que se queda sin pareja, miramos si hay algo MUY parecido (mismo nombre
-    // ignorando acentos/mayúsculas/símbolos) — así el típico "se ve igual pero no matchea"
-    // (acentos codificados distinto, un símbolo raro...) se ve a simple vista, no a ciegas.
-    if (sinPareja.length) {
-      const mapaAproximado = new Map();
-      for (const e of enRoot) {
-        const claveAprox = normName(e.name.replace(/\.[^.]+$/, ''));
-        if (claveAprox && !mapaAproximado.has(claveAprox)) mapaAproximado.set(claveAprox, e);
+      if (!tagsNrm.album) { sinPareja.push({ ...nrm, motivo: 'este archivo no tiene etiqueta de álbum' }); continue; }
+      const candidatosCarpeta = mapaAlbum.get(tagsNrm.album) || [];
+      if (candidatosCarpeta.length === 0) { sinPareja.push({ ...nrm, motivo: 'su álbum no coincide con ninguna carpeta' }); continue; }
+      if (candidatosCarpeta.length > 1) {
+        ambiguos.push({ origen: nrm, candidatos: candidatosCarpeta.map(c => c.nombreCarpeta) });
+        continue;
       }
-      for (const e of sinPareja) {
-        const claveAprox = normName(e.name.replace(/\.[^.]+$/, ''));
-        const parecido = claveAprox ? mapaAproximado.get(claveAprox) : null;
-        if (parecido) e.posibleCoincidencia = parecido.relPath;
+      const grupo = candidatosCarpeta[0].grupo;
+      const porTitulo = tagsNrm.title ? grupo.archivos.filter(a => a.titleNorm === tagsNrm.title) : [];
+      if (porTitulo.length === 1) {
+        listos.push({ origen: nrm, destino: porTitulo[0] });
+      } else {
+        revisar.push({ origen: nrm, carpeta: candidatosCarpeta[0].nombreCarpeta, archivosDeLaCarpeta: grupo.archivos });
       }
     }
 
@@ -3102,13 +3144,14 @@ async function ejecutarBusquedaNormalizados() {
     sinPareja.sort((a, b) => a.name.localeCompare(b.name, 'es'));
     enRoot.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
     normalizados.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
-    normResults = { listos, ambiguos, sinPareja, enRoot, normalizados };
+    normResults = { listos, ambiguos, revisar, sinPareja, enRoot, normalizados };
     normSel = new Set(listos.map(m => m.origen.relPath)); // pre-marcados: es el caso normal, no ambiguo
   } catch(e) {
     console.error('[Normalizados] error', e);
     normError = (e.name ? e.name + ': ' : '') + e.message;
   }
   normScanning = false;
+  normKeyPhase = false;
   renderNormalizados();
 }
 
@@ -3163,7 +3206,7 @@ function renderNormalizados() {
       <div style="font-weight:600">🎚️ Aplicar normalizados</div>
     </div>
     <div style="padding:16px;overflow-y:auto;height:calc(100% - 50px)">
-      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Busca, dentro de tu Carpeta raíz, las carpetas de vinilo que corresponden a los archivos ya recortados/normalizados en Audition (por nombre) y los pega ahí, sobrescribiendo el crudo y borrándolos de esta carpeta.</p>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Busca, dentro de tu Carpeta raíz, las carpetas de vinilo que corresponden a los archivos ya recortados/normalizados en Audition — usando el álbum y el título grabados en las propias etiquetas, no el nombre del archivo — y los pega ahí, sobrescribiendo el crudo y borrándolos de esta carpeta.</p>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
         <span style="font-size:12px;color:var(--text3)">📁 Carpeta raíz: ${rootDirHandle ? rootDirHandle.name : 'no conectada (ve a Configuración)'}</span>
         <button class="btn" onclick="pickNormalizadosDir()">🎚️ Carpeta de normalizados: ${normDirHandle ? normDirHandle.name : 'elegir...'}</button>
@@ -3171,12 +3214,14 @@ function renderNormalizados() {
         <button class="btn btn-accent" ${(!rootDirHandle || !normDirHandle || normScanning) ? 'disabled' : ''} onclick="ejecutarBusquedaNormalizados()">🔍 Buscar coincidencias</button>
       </div>
 
-      ${normScanning ? `<p style="font-size:12px;color:var(--text3)">Escaneando...</p>` : ''}
+      ${normScanning && !normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Escaneando carpetas...</p>` : ''}
+      ${normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Leyendo etiquetas... ${normKeyDone}/${normKeyTotal}</p>` : ''}
       ${normError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${normError}</p>` : ''}
 
       ${normResults ? `
         <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
           Encontrados: <b>${normResults.enRoot.length}</b> en la Carpeta raíz · <b>${normResults.normalizados.length}</b> en normalizados
+          ${normResults.revisar.length ? ` · <b style="color:var(--accent)">${normResults.revisar.length} a revisar</b>` : ''}
           ${normResults.ambiguos.length ? ` · <b style="color:var(--accent)">${normResults.ambiguos.length} ambiguo(s)</b>` : ''}
           ${normResults.sinPareja.length ? ` · <b style="color:var(--accent)">${normResults.sinPareja.length} sin pareja</b>` : ''}
         </div>
@@ -3202,22 +3247,32 @@ function renderNormalizados() {
           </div>
         `}
 
+        ${normResults.revisar.length ? `
+          <div class="d-section" style="margin-bottom:6px">🔎 A revisar (se encontró la carpeta por álbum, pero no una única pista por título)</div>
+          <div class="tracklist" style="margin-bottom:20px">
+            ${normResults.revisar.map(r => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
+              <span class="track-title" style="font-size:12px">${r.origen.name}</span>
+              <span style="font-size:11px;color:var(--text3)">carpeta: ${r.carpeta} — archivos ahí: ${r.archivosDeLaCarpeta.map(a => a.name).join(' · ')}</span>
+            </div>`).join('')}
+          </div>
+        ` : ''}
+
         ${normResults.ambiguos.length ? `
-          <div class="d-section" style="margin-bottom:6px">⚠ Ambiguos (mismo nombre en varias carpetas — resuélvelos a mano)</div>
+          <div class="d-section" style="margin-bottom:6px">⚠ Ambiguos (el mismo álbum está en varias carpetas — resuélvelos a mano)</div>
           <div class="tracklist" style="margin-bottom:20px">
             ${normResults.ambiguos.map(a => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
               <span class="track-title" style="font-size:12px">${a.origen.name}</span>
-              <span style="font-size:11px;color:var(--text3)">podría ser: ${a.candidatos.map(c => c.relPath).join(' · ')}</span>
+              <span style="font-size:11px;color:var(--text3)">podría ser: ${a.candidatos.join(' · ')}</span>
             </div>`).join('')}
           </div>
         ` : ''}
 
         ${normResults.sinPareja.length ? `
-          <div class="d-section" style="margin-bottom:6px">? Sin pareja (no encontrado en ninguna carpeta de vinilo)</div>
+          <div class="d-section" style="margin-bottom:6px">? Sin pareja</div>
           <div class="tracklist" style="margin-bottom:20px">
             ${normResults.sinPareja.map(e => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
               <span class="track-title" style="font-size:12px">${e.relPath}</span>
-              ${e.posibleCoincidencia ? `<span style="font-size:11px;color:var(--accent)">⚠ posible coincidencia (nombre no idéntico, revisa acentos/símbolos): ${e.posibleCoincidencia}</span>` : ''}
+              <span style="font-size:11px;color:var(--text3)">${e.motivo || ''}</span>
             </div>`).join('')}
           </div>
         ` : ''}
