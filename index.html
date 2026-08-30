@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.125 — Dj Petrik</title>
+<title>VinylBase v2.126 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.125</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.126</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3069,21 +3069,40 @@ async function ejecutarBusquedaNormalizados() {
     // Mapa nombre -> lista de sitios donde existe ese nombre dentro de las carpetas de vinilos
     const mapaRoot = new Map();
     for (const e of enRoot) {
-      const clave = e.name.toLowerCase();
+      const clave = e.name.normalize('NFC').toLowerCase();
       if (!mapaRoot.has(clave)) mapaRoot.set(clave, []);
       mapaRoot.get(clave).push(e);
     }
 
     const listos = [], ambiguos = [], sinPareja = [];
     for (const nrm of normalizados) {
-      const candidatos = mapaRoot.get(nrm.name.toLowerCase()) || [];
+      const candidatos = mapaRoot.get(nrm.name.normalize('NFC').toLowerCase()) || [];
       if (candidatos.length === 0) sinPareja.push(nrm);
       else if (candidatos.length === 1) listos.push({ origen: nrm, destino: candidatos[0] });
       else ambiguos.push({ origen: nrm, candidatos });
     }
+
+    // Para lo que se queda sin pareja, miramos si hay algo MUY parecido (mismo nombre
+    // ignorando acentos/mayúsculas/símbolos) — así el típico "se ve igual pero no matchea"
+    // (acentos codificados distinto, un símbolo raro...) se ve a simple vista, no a ciegas.
+    if (sinPareja.length) {
+      const mapaAproximado = new Map();
+      for (const e of enRoot) {
+        const claveAprox = normName(e.name.replace(/\.[^.]+$/, ''));
+        if (claveAprox && !mapaAproximado.has(claveAprox)) mapaAproximado.set(claveAprox, e);
+      }
+      for (const e of sinPareja) {
+        const claveAprox = normName(e.name.replace(/\.[^.]+$/, ''));
+        const parecido = claveAprox ? mapaAproximado.get(claveAprox) : null;
+        if (parecido) e.posibleCoincidencia = parecido.relPath;
+      }
+    }
+
     listos.sort((a, b) => a.origen.name.localeCompare(b.origen.name, 'es'));
     sinPareja.sort((a, b) => a.name.localeCompare(b.name, 'es'));
-    normResults = { listos, ambiguos, sinPareja };
+    enRoot.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
+    normalizados.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
+    normResults = { listos, ambiguos, sinPareja, enRoot, normalizados };
   } catch(e) {
     console.error('[Normalizados] error', e);
     normError = (e.name ? e.name + ': ' : '') + e.message;
@@ -3157,8 +3176,26 @@ function renderNormalizados() {
 
       ${normResults ? `
         <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
-          Listos para aplicar: <b>${normResults.listos.length}</b> · Ambiguos: <b>${normResults.ambiguos.length}</b> · Sin pareja: <b>${normResults.sinPareja.length}</b>
+          Encontrados en la Carpeta raíz: <b>${normResults.enRoot.length}</b> · En normalizados: <b>${normResults.normalizados.length}</b> · Listos: <b>${normResults.listos.length}</b> · Ambiguos: <b>${normResults.ambiguos.length}</b> · Sin pareja: <b>${normResults.sinPareja.length}</b>
         </div>
+
+        <details style="margin-bottom:16px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--text2);margin-bottom:8px">📋 Ver TODOS los archivos encontrados (para revisar tú mismo)</summary>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
+            <div>
+              <div class="d-section" style="margin-bottom:6px">En la Carpeta raíz (${normResults.enRoot.length})</div>
+              <div class="tracklist" style="max-height:260px;overflow-y:auto">
+                ${normResults.enRoot.map(e => `<div class="track-row"><span class="track-title" style="font-size:11px;font-family:monospace">${e.relPath}</span></div>`).join('')}
+              </div>
+            </div>
+            <div>
+              <div class="d-section" style="margin-bottom:6px">En normalizados (${normResults.normalizados.length})</div>
+              <div class="tracklist" style="max-height:260px;overflow-y:auto">
+                ${normResults.normalizados.map(e => `<div class="track-row"><span class="track-title" style="font-size:11px;font-family:monospace">${e.relPath}</span></div>`).join('')}
+              </div>
+            </div>
+          </div>
+        </details>
 
         <div class="d-section" style="margin-bottom:6px">✓ Listos para aplicar</div>
         ${!normResults.listos.length ? '<p style="font-size:12px;color:var(--text3);padding:10px">Nada listo</p>' : `
@@ -3189,7 +3226,10 @@ function renderNormalizados() {
         ${normResults.sinPareja.length ? `
           <div class="d-section" style="margin-bottom:6px">? Sin pareja (no encontrado en ninguna carpeta de vinilo)</div>
           <div class="tracklist" style="max-height:200px;overflow-y:auto">
-            ${normResults.sinPareja.map(e => `<div class="track-row"><span class="track-title" style="font-size:12px">${e.relPath}</span></div>`).join('')}
+            ${normResults.sinPareja.map(e => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
+              <span class="track-title" style="font-size:12px">${e.relPath}</span>
+              ${e.posibleCoincidencia ? `<span style="font-size:11px;color:var(--accent)">⚠ posible coincidencia (nombre no idéntico, revisa acentos/símbolos): ${e.posibleCoincidencia}</span>` : ''}
+            </div>`).join('')}
           </div>
         ` : ''}
       ` : ''}
