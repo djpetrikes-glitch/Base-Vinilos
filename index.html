@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.123 — Dj Petrik</title>
+<title>VinylBase v2.124 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.123</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.124</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1955,6 +1955,7 @@ async function confirmCortadorAssociation() {
       cortadorAssocData = null;
       cortadorValidatedTracks = {};
       guardarProgresoCortador();
+      await marcarRipeadosYColocarKallax(cortadorSessionDiscs);
       abrirAyudanteCaratulas();
     }
   } catch(e) {
@@ -1964,6 +1965,49 @@ async function confirmCortadorAssociation() {
   }
   cortadorRunning = false;
   renderCortador();
+}
+
+// Al terminar de cortar y guardar los temas, si el disco no lo tenías puesto en la Kallax
+// a mano todavía, se coloca solo (mismo cálculo que "Colocar automáticamente"). Evita que
+// un ripeado se quede sin sitio hasta que te acuerdes de pulsarlo tú. También marca el
+// disco como ripeado si no lo estaba ya — así el contador de ripeados y lo que hay puesto
+// en la Kallax no se desincronizan con el tiempo.
+async function marcarRipeadosYColocarKallax(discosSesion) {
+  const idxsParaKallax = [];
+  const idxsTocados = new Set();
+  for (const entry of discosSesion) {
+    if (entry.manual || !entry.row) continue;
+    const idx = allData.indexOf(entry.row);
+    if (idx === -1) continue;
+    const row = allData[idx];
+    const yaRipeado = g(row, COL.ripeado).toLowerCase() === 'sí' || g(row, COL.ripeado).toLowerCase() === 'si';
+    if (!yaRipeado) {
+      row[COL.ripeado] = 'Sí';
+      if (!row[COL.ripeado_por]) row[COL.ripeado_por] = 'DJ Petrik';
+      idxsTocados.add(idx);
+    }
+    if (!g(row, COL.kallax_slot)) idxsParaKallax.push(idx);
+  }
+
+  if (idxsParaKallax.length) {
+    const { moves, overflow } = calcularRecolocacionKallax(idxsParaKallax);
+    if (overflow) {
+      cortadorLogLine('⚠ No caben todos en la Kallax con tu configuración actual (huecos/discos por hueco) — ajústalo en Configuración y usa "Colocar automáticamente" a mano luego.');
+    } else if (moves.length) {
+      moves.forEach(m => { allData[m.idx][COL.kallax_slot] = String(m.to); idxsTocados.add(m.idx); });
+      const texto = moves.map(m => {
+        const r = allData[m.idx];
+        const nombre = `${g(r, COL.artist)} — ${g(r, COL.title)}`;
+        return m.from ? `${nombre}: hueco ${m.from} → ${m.to}` : `${nombre}: → hueco ${m.to}`;
+      }).join('\n  ');
+      cortadorLogLine(`📐 Colocación en Kallax:\n  ${texto}`);
+    }
+  }
+
+  for (const idx of idxsTocados) {
+    await saveToSheet(idx);
+  }
+  if (idxsTocados.size) renderView();
 }
 
 function sanitizeFolderName(name) {
@@ -4340,14 +4384,14 @@ function renderCortadorWorkPanel() {
 
   const cards = cortadorSessionDiscs.map((entry, idx) => {
     const tracks = getTracksForSessionDisc(idx);
-    let coverHtml, titleHtml, coverDropAttrs = '';
+    let coverHtml, titleHtml, coverDropAttrs = '', cleanId = null;
     if (entry.manual) {
       coverHtml = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
       titleHtml = `<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${entry.title}</div><div style="font-size:10px;color:var(--text3)">a mano</div>`;
     } else {
       const row = entry.row;
       const releaseId = g(row, COL.release_id);
-      const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+      cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
       const cachedCover = cleanId ? coverCache[cleanId] : undefined;
       coverHtml = cachedCover
         ? `<img src="${cachedCover}" style="width:100%;height:100%;object-fit:cover;pointer-events:none">`
@@ -4357,7 +4401,7 @@ function renderCortadorWorkPanel() {
     }
 
     const tracksHtml = tracks.length === 0
-      ? `<div style="font-size:11px;color:var(--text3)">${entry.manual ? '' : 'Cargando canciones de Discogs...'}</div>`
+      ? `<div style="font-size:11px;color:${(!entry.manual && coverFetchErrors[cleanId]) ? '#e55' : 'var(--text3)'}">${entry.manual ? '' : (coverFetchErrors[cleanId] ? `⚠ Error trayendo datos de Discogs: ${coverFetchErrors[cleanId]}` : 'Cargando canciones de Discogs...')}</div>`
       : `<div class="tracklist">
           ${tracks.map((t, ti) => `
             <div class="track-row cortador-drop-target" style="flex-direction:column;align-items:flex-start;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;margin-bottom:4px;cursor:default"
@@ -4702,24 +4746,8 @@ function renderSesiones() {
 }
 
 // ─── ACTIONS ──────────────────────────────────────────────────────────────────
-async function loadCoverForRow(row) {
-  const releaseId = g(row, COL.release_id);
-  if (!releaseId) return null;
-  // Quitar último dígito del release_id (formato del Sheet tiene un 0 extra)
-  const cleanId = releaseId.toString().slice(0, -1);
-  if (coverCache[cleanId] !== undefined) return coverCache[cleanId];
-  try {
-    const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: DISCOGS_HEADERS });
-    const data = await res.json();
-    const images = data.images || [];
-    const primary = images.find(i => i.type === 'primary');
-    const img = (primary && primary.uri) || (images[0] && images[0].uri) || null;
-    coverCache[cleanId] = img;
-    return img;
-  } catch(e) { coverCache[cleanId] = null; return null; }
-}
-
 const tracklistCache = {};
+const coverFetchErrors = {}; // cleanId -> mensaje, para poder avisar en vez de dejarlo en "Cargando..." para siempre
 
 async function loadCoverForRow(row) {
   const releaseId = g(row, COL.release_id);
@@ -4729,6 +4757,11 @@ async function loadCoverForRow(row) {
   if (coverCache[cleanId] !== undefined) return coverCache[cleanId];
   try {
     const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: DISCOGS_HEADERS });
+    if (!res.ok) {
+      let motivo = `HTTP ${res.status}`;
+      try { motivo = (await res.json()).message || motivo; } catch(e) {}
+      throw new Error(motivo);
+    }
     const data = await res.json();
     const images = data.images || [];
     const primary = images.find(i => i.type === 'primary');
@@ -4737,10 +4770,13 @@ async function loadCoverForRow(row) {
     tracklistCache[cleanId] = (data.tracklist || []).map(t => ({
       position: t.position || '', title: t.title || '', duration: t.duration || ''
     }));
+    delete coverFetchErrors[cleanId];
     return img;
   } catch(e) {
+    console.error('[loadCoverForRow] release', cleanId, e);
     coverCache[cleanId] = null;
     tracklistCache[cleanId] = null;
+    coverFetchErrors[cleanId] = e.message || 'Error desconocido';
     return null;
   }
 }
@@ -5219,9 +5255,10 @@ async function searchCoverDiscogs(idx) {
   const row = allData[idx];
   const releaseId = g(row, COL.release_id);
   if (!releaseId) { showToast('Sin Release ID de Discogs', true); return; }
+  const cleanId = releaseId.toString().slice(0, -1); // el Sheet guarda un dígito extra al final
   showToast('Buscando carátula en Discogs...');
   try {
-    const res = await fetch(`https://api.discogs.com/releases/${releaseId}`, {
+    const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, {
       headers: { 'User-Agent': 'VinylBase/1.0' }
     });
     const data = await res.json();
@@ -5231,7 +5268,7 @@ async function searchCoverDiscogs(idx) {
       if (ph) ph.outerHTML = `<img src="${img}" style="width:100%;height:100%;object-fit:cover">`;
       showToast('✓ Carátula cargada');
     } else showToast('Sin carátula en Discogs para este release', true);
-  } catch(e) { showToast('Error al buscar carátula', true); }
+  } catch(e) { console.error('[searchCoverDiscogs]', e); showToast('Error al buscar carátula', true); }
 }
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -5293,10 +5330,11 @@ function compareNatural(a, b) {
 // de numerar 1,2,3...: empieza por el hueco más alto y baja). Solo devuelve los que de
 // verdad cambian de hueco respecto a donde están ahora (normalmente muy pocos, los que
 // caen justo en el borde entre dos huecos).
-function calcularRecolocacionKallax(idxNuevo) {
+function calcularRecolocacionKallax(idxNuevoOVarios) {
+  const nuevos = Array.isArray(idxNuevoOVarios) ? idxNuevoOVarios : [idxNuevoOVarios];
   const idxSet = new Set();
   allData.forEach((r, i) => { if (g(r, COL.kallax_slot)) idxSet.add(i); });
-  idxSet.add(idxNuevo);
+  nuevos.forEach(i => idxSet.add(i));
   const idxs = [...idxSet];
   idxs.sort((ia, ib) => compareNatural(g(allData[ia], COL.catalog), g(allData[ib], COL.catalog)));
 
