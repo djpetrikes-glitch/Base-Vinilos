@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.136 — Dj Petrik</title>
+<title>VinylBase v2.137 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.136</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.137</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1349,7 +1349,34 @@ function computeDefaultAssignments(segments, expectedDurations) {
       i = k; j -= 1;
     }
   }
-  return assignments;
+  return limitarSobrepasoDeGrupos(assignments, segments, expectedDurations);
+}
+
+// Paso aparte, después del cálculo principal (que ya está bien probado y no se toca):
+// si un grupo de trozos fusionados se dispara muy por encima de lo que dura el tema
+// esperado (más del 160%, o más de 2 minutos de sobra), es que ahí ya no caben más
+// trozos de verdad — probablemente se han acabado los temas esperados y lo que sigue
+// es el disco siguiente, que aún no se ha añadido a la sesión. Se corta el grupo justo
+// ahí: los primeros trozos (los que sí encajaban) se quedan, el resto se deja SIN
+// ASIGNAR para que se revise a mano, en vez de amontonarlo todo en el mismo hueco.
+function limitarSobrepasoDeGrupos(assignments, segments, expectedDurations) {
+  const resultado = [...assignments];
+  for (let j = 0; j < expectedDurations.length; j++) {
+    const expDur = expectedDurations[j];
+    if (expDur == null) continue;
+    const idxsGrupo = resultado.map((a, i) => a === j ? i : -1).filter(i => i >= 0);
+    if (idxsGrupo.length <= 1) continue;
+    let suma = 0;
+    for (let n = 0; n < idxsGrupo.length; n++) {
+      const dur = segments[idxsGrupo[n]].endSec - segments[idxsGrupo[n]].startSec;
+      if (suma > 0 && suma + dur > expDur * 1.6 + 120) {
+        for (let m = n; m < idxsGrupo.length; m++) resultado[idxsGrupo[m]] = -1;
+        break;
+      }
+      suma += dur;
+    }
+  }
+  return resultado;
 }
 
 function refineSegmentsByDuration(segments, envelope, windowMs, minTrackSec, maxTrackSec) {
@@ -5144,7 +5171,7 @@ function renderCortadorAssocEditor() {
               <span style="white-space:nowrap">(${fmtDuration(dur)})</span>${sumBadge}
             </span>
             <select onchange="setCortadorAssignment(${i}, this.value)" style="flex:1;min-width:180px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:4px 6px;color:var(--text);font-size:12px">
-              <option value="-1" ${assignments[i] === -1 ? 'selected' : ''}>— Descartar (ruido) —</option>
+              <option value="-1" ${assignments[i] === -1 ? 'selected' : ''}>${dur > 15 ? '— ⚠ Sin encaje (revisar — ¿otro disco?) —' : '— Descartar (ruido) —'}</option>
               ${expected.map((t, ei) => `<option value="${ei}" ${assignments[i] === ei ? 'selected' : ''}>${t.position ? t.position + ' — ' : ''}${t.title}${t.durationSec != null ? ' (' + fmtDuration(t.durationSec) + ')' : ''}</option>`).join('')}
             </select>
             <button class="btn" style="font-size:12px;padding:4px 9px;${assignments[i] != null && assignments[i] >= 0 ? '' : 'opacity:.4;cursor:default'}" ${assignments[i] != null && assignments[i] >= 0 ? '' : 'disabled'} onclick="validateCortadorTrack(${i})" title="Dar este tema por bueno — no se tocará en un futuro reanálisis">✓</button>
