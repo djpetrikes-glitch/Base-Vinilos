@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.121 — Dj Petrik</title>
+<title>VinylBase v2.123 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.121</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.123</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -308,6 +308,7 @@
       <button class="btn" onclick="closeModal()" style="padding:4px 8px">✕</button>
     </div>
     <div class="modal-body">
+      <img id="f-thumb" src="" alt="Carátula" style="display:none;width:100px;height:100px;object-fit:cover;border-radius:var(--radius);margin:0 auto 10px">
       <div class="row2">
         <div class="field-g"><label>Artista</label><input id="f-artist" placeholder="Larry Heard" oninput="updateNewRec('artist',this.value)"></div>
         <div class="field-g"><label>Título</label><input id="f-title" placeholder="Can You Feel It" oninput="updateNewRec('title',this.value)"></div>
@@ -3987,14 +3988,20 @@ function renderConfig() {
 // ─── TEMAS JUNTOS (toda la colección digital) ──────────────────────────────────
 let temasJuntosQ = '';
 
+// Mismo motivo que el buscador principal: redibujar en cada tecla se siente como si no
+// respondiera con miles de temas, y da la sensación de tener que borrar y volver a escribir.
+let tjSearchDebounceTimer = null;
 function onTemasJuntosSearch(v) {
   temasJuntosQ = v;
-  const pos = v.length;
-  renderTemasJuntos();
-  requestAnimationFrame(() => {
-    const inp = document.getElementById('tj-search-input');
-    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
-  });
+  clearTimeout(tjSearchDebounceTimer);
+  tjSearchDebounceTimer = setTimeout(() => {
+    const pos = v.length;
+    renderTemasJuntos();
+    requestAnimationFrame(() => {
+      const inp = document.getElementById('tj-search-input');
+      if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+    });
+  }, 200);
 }
 
 function reindexTemasJuntos() {
@@ -4066,14 +4073,18 @@ async function renderTemasJuntos() {
 // ─── BUSCADOR UNIFICADO (¿tengo este tema?) ────────────────────────────────────
 let buscadorQ = '';
 
+let buscadorSearchDebounceTimer = null;
 function onBuscadorSearch(v) {
   buscadorQ = v;
-  const pos = v.length;
-  renderBuscador();
-  requestAnimationFrame(() => {
-    const inp = document.getElementById('buscador-input');
-    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
-  });
+  clearTimeout(buscadorSearchDebounceTimer);
+  buscadorSearchDebounceTimer = setTimeout(() => {
+    const pos = v.length;
+    renderBuscador();
+    requestAnimationFrame(() => {
+      const inp = document.getElementById('buscador-input');
+      if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+    });
+  }, 200);
 }
 
 function findVinylForDigitalEntry(e) {
@@ -4518,14 +4529,18 @@ function parseDiscogsDuration(str) {
   return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
 }
 
+let cortadorDiscSearchDebounceTimer = null;
 function onCortadorDiscSearch(v) {
   cortadorDiscSearchQ = v;
-  const pos = v.length;
-  renderCortador();
-  requestAnimationFrame(() => {
-    const inp = document.getElementById('cortador-disc-search');
-    if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
-  });
+  clearTimeout(cortadorDiscSearchDebounceTimer);
+  cortadorDiscSearchDebounceTimer = setTimeout(() => {
+    const pos = v.length;
+    renderCortador();
+    requestAnimationFrame(() => {
+      const inp = document.getElementById('cortador-disc-search');
+      if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+    });
+  }, 200);
 }
 
 async function addCortadorSessionDisc(idx) {
@@ -4986,6 +5001,7 @@ function openModal() {
   document.getElementById('f-catalog').value = '';
   document.getElementById('f-release-id').value = '';
   document.getElementById('discogs-results').style.display = 'none';
+  actualizarThumbModal();
 }
 
 function closeModal() {
@@ -4993,6 +5009,18 @@ function closeModal() {
 }
 
 function updateNewRec(field, val) { newRec[field] = val; }
+
+function actualizarThumbModal() {
+  const img = document.getElementById('f-thumb');
+  if (!img) return;
+  if (newRec.thumb) {
+    img.src = newRec.thumb;
+    img.style.display = 'block';
+  } else {
+    img.src = '';
+    img.style.display = 'none';
+  }
+}
 
 // Acepta lo que sea que pegues: un ID suelto ("1112233"), o la URL completa de la página
 // del disco en Discogs ("https://www.discogs.com/release/1112233-Artista-Titulo") — en
@@ -5034,6 +5062,7 @@ async function traerDatosDeDiscogsPorId(idLimpio) {
     if (data.images && data.images.length) {
       newRec.thumb = data.images[0].uri150 || data.images[0].uri || '';
     }
+    actualizarThumbModal();
     return { ok: true };
   } catch(e) {
     console.error(e);
@@ -5182,6 +5211,7 @@ function selectDiscogs(i, title, year, label, catno, thumb, releaseId) {
   // dejarse arrastrar una carátula manual — todo eso depende de tener un release_id.
   newRec.releaseId = releaseId || '';
   newRec.thumb = thumb || '';
+  actualizarThumbModal();
   document.getElementById('discogs-results').style.display = 'none';
 }
 
@@ -5256,10 +5286,13 @@ function compareNatural(a, b) {
 }
 
 // Calcula dónde debería ir CADA disco ya colocado (más el nuevo, idxNuevo) si se ordenan
-// todos por referencia de catálogo y se reparten en tandas de kallaxConfig.porHueco por
-// hueco — hueco 1 se lleva las referencias más bajas, el último hueco activo las más
-// altas. Solo devuelve los que de verdad cambian de hueco respecto a donde están ahora
-// (normalmente muy pocos, los que caen justo en el borde entre dos huecos).
+// todos por referencia de catálogo (de más baja a más alta) y se reparten en tandas de
+// kallaxConfig.porHueco por hueco — el hueco MÁS ALTO (numHuecos) se lleva las referencias
+// más bajas y se llena primero; según va creciendo la colección, se sigue por el hueco
+// anterior, y así hacia el hueco 1 (así coloca físicamente Nicolás su Kallax — al revés
+// de numerar 1,2,3...: empieza por el hueco más alto y baja). Solo devuelve los que de
+// verdad cambian de hueco respecto a donde están ahora (normalmente muy pocos, los que
+// caen justo en el borde entre dos huecos).
 function calcularRecolocacionKallax(idxNuevo) {
   const idxSet = new Set();
   allData.forEach((r, i) => { if (g(r, COL.kallax_slot)) idxSet.add(i); });
@@ -5270,7 +5303,7 @@ function calcularRecolocacionKallax(idxNuevo) {
   const overflow = idxs.length > kallaxConfig.numHuecos * kallaxConfig.porHueco;
   const moves = [];
   idxs.forEach((i, pos) => {
-    const huecoIdeal = Math.min(kallaxConfig.numHuecos, Math.floor(pos / kallaxConfig.porHueco) + 1);
+    const huecoIdeal = Math.max(1, kallaxConfig.numHuecos - Math.floor(pos / kallaxConfig.porHueco));
     const huecoActual = g(allData[i], COL.kallax_slot);
     if (String(huecoActual) !== String(huecoIdeal)) {
       moves.push({ idx: i, from: huecoActual || null, to: huecoIdeal });
