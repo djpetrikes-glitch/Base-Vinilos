@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.134 — Dj Petrik</title>
+<title>VinylBase v2.135 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.134</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.135</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -623,6 +623,7 @@ let colaAnadirGranted = false;
 let normDirHandle = null;         // carpeta donde guardas los WAV ya recortados/normalizados en Audition
 let normGranted = false;
 let cortadorRunning = false;
+let cortadorListoParaAyudante = false; // el intento automático puede fallar en silencio si tarda mucho (el navegador exige un clic reciente para abrir programas externos) — este botón siempre funciona porque es un clic de verdad
 let cortadorLog = [];
 let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
 let cortadorDiscSearchQ = '';
@@ -1651,6 +1652,8 @@ async function analyzeCortadorRaw() {
   const { fmt, dataOffset, dataLength } = parseWavHeader(headerSlice, file.size);
   const frameSize = (fmt.bitsPerSample / 8) * fmt.numChannels;
   const totalDurationSec = dataLength / frameSize / fmt.sampleRate;
+  cortadorLogLine(`  ${fmt.sampleRate}Hz, ${fmt.numChannels}ch, ${fmt.bitsPerSample}bit — el audio empieza en el byte ${dataOffset} del archivo (cabecera normal: unos 44-100 bytes; si aquí sale un número mucho más alto, avísame, puede ser la causa de un desfase).`);
+  cortadorLogLine(`  Duración total detectada: ${fmtTimecode(totalDurationSec)}`);
 
   cortadorLogLine('Detectando silencios entre temas (leyendo el audio a trozos, sin cargarlo entero)...');
   const { envelope, windowMs } = await computeEnvelope(file, fmt, dataOffset, dataLength, 50, (pct) => cortadorLogLine(`  Analizando audio... ${pct}%`));
@@ -1980,6 +1983,7 @@ async function confirmCortadorAssociation() {
       cortadorValidatedTracks = {};
       guardarProgresoCortador();
       await marcarRipeadosYColocarKallax(cortadorSessionDiscs);
+      cortadorListoParaAyudante = true; // por si el intento automático de abajo falla en silencio
       abrirAyudanteCaratulas();
     }
   } catch(e) {
@@ -4836,6 +4840,14 @@ function renderCortador() {
     <div class="content-header">
       <div style="font-weight:600">✂️ Cortar rip</div>
     </div>
+    ${cortadorListoParaAyudante ? `
+      <div style="padding:10px 16px;background:rgba(255,140,0,.12);border-bottom:1px solid var(--border)">
+        <button class="btn btn-accent" style="width:100%;justify-content:center;padding:10px;font-size:13px" onclick="abrirAyudanteCaratulas();cortadorListoParaAyudante=false;renderCortador()">
+          🚀 Abrir Poner Carátulas ahora
+        </button>
+        <p style="font-size:11px;color:var(--text3);margin-top:6px">El intento automático a veces no llega a abrirse si el corte tarda mucho — el navegador solo deja abrir programas externos justo después de un clic tuyo. Este botón siempre funciona.</p>
+      </div>
+    ` : ''}
     <div style="display:flex;height:calc(100% - 60px);min-height:0">
     <div id="cortador-scroll" style="padding:16px;overflow-y:auto;flex:1;max-width:640px">
       <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
