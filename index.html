@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.129 — Dj Petrik</title>
+<title>VinylBase v2.130 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.129</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.130</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3077,19 +3077,54 @@ function explicarErrorLecturaNormalizados(err) {
   return 'Error leyendo el archivo: ' + (msg || (err && err.name) || 'desconocido');
 }
 
+// Lector directo de frames ID3v2.3, sin pasar por jsmediatags — como la propia app es
+// quien escribe estos WAV (embedTagsInWav), sabemos exactamente el formato: cabecera
+// synchsafe de 10 bytes, frames con tamaño normal (big-endian, no synchsafe en v2.3), texto
+// en encoding 0 pero en realidad UTF-8 (así es como lo escribe id3TextFrame). Confiar en
+// una librería de terceros para leer nuestros propios bytes fue el problema — esto es fiel
+// al 100% a como se escribió, sin sorpresas.
+function leerFramesId3(id3Buffer) {
+  const frames = {};
+  const dv = new DataView(id3Buffer);
+  const len = id3Buffer.byteLength;
+  if (len < 10) return frames;
+  if (!(dv.getUint8(0) === 0x49 && dv.getUint8(1) === 0x44 && dv.getUint8(2) === 0x33)) return frames; // "ID3"
+  const tamTag = ((dv.getUint8(6) & 0x7F) << 21) | ((dv.getUint8(7) & 0x7F) << 14) | ((dv.getUint8(8) & 0x7F) << 7) | (dv.getUint8(9) & 0x7F);
+  let offset = 10;
+  const fin = Math.min(len, 10 + tamTag);
+  while (offset + 10 <= fin) {
+    const frameId = String.fromCharCode(dv.getUint8(offset), dv.getUint8(offset + 1), dv.getUint8(offset + 2), dv.getUint8(offset + 3));
+    if (!/^[A-Z][A-Z0-9]{3}$/.test(frameId)) break; // padding o basura: hemos terminado
+    const frameSize = dv.getUint32(offset + 4, false);
+    const dataStart = offset + 10;
+    const finFrame = dataStart + frameSize;
+    if (frameSize <= 0 || finFrame > len) break;
+
+    if (frameId === 'TXXX') {
+      let i = dataStart + 1;
+      while (i < finFrame && dv.getUint8(i) !== 0) i++;
+      const descripcion = new TextDecoder('utf-8').decode(new Uint8Array(id3Buffer, dataStart + 1, i - (dataStart + 1)));
+      const valor = new TextDecoder('utf-8').decode(new Uint8Array(id3Buffer, i + 1, finFrame - (i + 1))).replace(/\0+$/, '');
+      frames['TXXX:' + descripcion.toUpperCase()] = valor;
+    } else if (frameId[0] === 'T') {
+      const texto = new TextDecoder('utf-8').decode(new Uint8Array(id3Buffer, dataStart + 1, finFrame - (dataStart + 1))).replace(/\0+$/, '');
+      frames[frameId] = texto;
+    }
+    offset = finFrame;
+  }
+  return frames;
+}
+
+// Solo funciona con WAV (el formato que produce el Cortador) — es donde embedTagsInWav
+// mete estos frames. Devuelve {title, catalog} normalizados, o vacíos si no hay etiqueta.
 async function leerTagsNormalizados(entry) {
   const file = await entry.handle.getFile();
-  if (/\.wav$/i.test(entry.name)) {
-    const buf = await file.arrayBuffer();
-    const info = leerChunkWav(buf);
-    if (info.id3Buffer) {
-      const tagsId3 = await readTags(new Blob([info.id3Buffer]));
-      if (tagsId3.title || tagsId3.album) return { title: normName(tagsId3.title), album: normName(tagsId3.album) };
-    }
-    return { title: normName(info.title), album: '' }; // el RIFF/INFO nativo no trae álbum
-  }
-  const tags = await readTags(file);
-  return { title: normName(tags.title), album: normName(tags.album) };
+  if (!/\.wav$/i.test(entry.name)) return { title: '', catalog: '' };
+  const buf = await file.arrayBuffer();
+  const info = leerChunkWav(buf);
+  if (!info.id3Buffer) return { title: normName(info.title), catalog: '' }; // solo RIFF/INFO nativo, sin catálogo
+  const frames = leerFramesId3(info.id3Buffer);
+  return { title: normName(frames['TIT2']), catalog: normName(frames['TXXX:CATALOGNUMBER']) };
 }
 
 async function ejecutarBusquedaNormalizados() {
@@ -3107,19 +3142,23 @@ async function ejecutarBusquedaNormalizados() {
     normKeyTotal = enRoot.length + normalizados.length;
     renderNormalizados();
 
-    // Agrupamos por carpeta de vinilo (primer trozo de la ruta relativa) y leemos las
-    // etiquetas de cada archivo para saber el álbum de esa carpeta y el título de cada pista.
-    // Un archivo que no se puede leer (sincronizándose en la nube, abierto en otro
-    // programa...) NO debe tirar abajo la búsqueda entera — se salta y se sigue con el resto.
-    const carpetas = new Map(); // nombreCarpeta -> { albumNorm, archivos: [...] }
+    // Agrupamos por carpeta de vinilo (primer trozo de la ruta relativa). El catálogo de
+    // cada carpeta sale del propio NOMBRE de la carpeta — "(CATALOGO) Artista - Título",
+    // así la crea buildDiscFolderName — sin necesidad de leer ningún archivo para eso.
+    // Solo leemos etiquetas para saber el título de cada pista (para acotar el archivo
+    // exacto dentro de la carpeta ya localizada). Un archivo que no se puede leer no debe
+    // tirar abajo la búsqueda entera — se salta y se sigue con el resto.
+    const carpetas = new Map(); // nombreCarpeta -> { catalogNorm, archivos: [...] }
     const noLeidosRoot = [];
     for (const e of enRoot) {
       const nombreCarpeta = e.relPath.split('/')[0];
-      if (!carpetas.has(nombreCarpeta)) carpetas.set(nombreCarpeta, { albumNorm: '', archivos: [] });
+      if (!carpetas.has(nombreCarpeta)) {
+        const m = nombreCarpeta.match(/^\(([^)]+)\)/);
+        carpetas.set(nombreCarpeta, { catalogNorm: m ? normName(m[1]) : '', archivos: [] });
+      }
       const grupo = carpetas.get(nombreCarpeta);
       try {
         const tags = await leerTagsNormalizados(e);
-        if (!grupo.albumNorm && tags.album) grupo.albumNorm = tags.album;
         grupo.archivos.push({ ...e, titleNorm: tags.title });
       } catch(err) {
         console.error('[Normalizados] no se pudo leer', e.relPath, err);
@@ -3130,12 +3169,12 @@ async function ejecutarBusquedaNormalizados() {
       if (normKeyDone % 15 === 0) renderNormalizados();
     }
 
-    // Álbum -> carpeta(s) cuyo álbum coincide (normalmente 1)
-    const mapaAlbum = new Map();
+    // Catálogo -> carpeta(s) cuyo nombre empieza por ese catálogo (normalmente 1)
+    const mapaCatalogo = new Map();
     for (const [nombreCarpeta, grupo] of carpetas) {
-      if (!grupo.albumNorm) continue;
-      if (!mapaAlbum.has(grupo.albumNorm)) mapaAlbum.set(grupo.albumNorm, []);
-      mapaAlbum.get(grupo.albumNorm).push({ nombreCarpeta, grupo });
+      if (!grupo.catalogNorm) continue;
+      if (!mapaCatalogo.has(grupo.catalogNorm)) mapaCatalogo.set(grupo.catalogNorm, []);
+      mapaCatalogo.get(grupo.catalogNorm).push({ nombreCarpeta, grupo });
     }
 
     const listos = [], ambiguos = [], revisar = [], sinPareja = [];
@@ -3153,9 +3192,9 @@ async function ejecutarBusquedaNormalizados() {
       normKeyDone++;
       if (normKeyDone % 15 === 0) renderNormalizados();
 
-      if (!tagsNrm.album) { sinPareja.push({ ...nrm, motivo: 'este archivo no tiene etiqueta de álbum' }); continue; }
-      const candidatosCarpeta = mapaAlbum.get(tagsNrm.album) || [];
-      if (candidatosCarpeta.length === 0) { sinPareja.push({ ...nrm, motivo: 'su álbum no coincide con ninguna carpeta' }); continue; }
+      if (!tagsNrm.catalog) { sinPareja.push({ ...nrm, motivo: 'este archivo no tiene etiqueta de catálogo (CATALOGNUMBER)' }); continue; }
+      const candidatosCarpeta = mapaCatalogo.get(tagsNrm.catalog) || [];
+      if (candidatosCarpeta.length === 0) { sinPareja.push({ ...nrm, motivo: `su catálogo no coincide con el de ninguna carpeta` }); continue; }
       if (candidatosCarpeta.length > 1) {
         ambiguos.push({ origen: nrm, candidatos: candidatosCarpeta.map(c => c.nombreCarpeta) });
         continue;
@@ -3235,7 +3274,7 @@ function renderNormalizados() {
       <div style="font-weight:600">🎚️ Aplicar normalizados</div>
     </div>
     <div style="padding:16px;overflow-y:auto;height:calc(100% - 50px)">
-      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Busca, dentro de tu Carpeta raíz, las carpetas de vinilo que corresponden a los archivos ya recortados/normalizados en Audition — usando el álbum y el título grabados en las propias etiquetas, no el nombre del archivo — y los pega ahí, sobrescribiendo el crudo y borrándolos de esta carpeta.</p>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Busca, dentro de tu Carpeta raíz, las carpetas de vinilo que corresponden a los archivos ya recortados/normalizados en Audition — usando el número de catálogo y el título grabados en las propias etiquetas del WAV, no el nombre del archivo — y los pega ahí, sobrescribiendo el crudo y borrándolos de esta carpeta.</p>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
         <span style="font-size:12px;color:var(--text3)">📁 Carpeta raíz: ${rootDirHandle ? rootDirHandle.name : 'no conectada (ve a Configuración)'}</span>
         <button class="btn" onclick="pickNormalizadosDir()">🎚️ Carpeta de normalizados: ${normDirHandle ? normDirHandle.name : 'elegir...'}</button>
@@ -3288,7 +3327,7 @@ function renderNormalizados() {
         ` : ''}
 
         ${normResults.ambiguos.length ? `
-          <div class="d-section" style="margin-bottom:6px">⚠ Ambiguos (el mismo álbum está en varias carpetas — resuélvelos a mano)</div>
+          <div class="d-section" style="margin-bottom:6px">⚠ Ambiguos (el mismo catálogo está en varias carpetas — resuélvelos a mano)</div>
           <div class="tracklist" style="margin-bottom:20px">
             ${normResults.ambiguos.map(a => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
               <span class="track-title" style="font-size:12px">${a.origen.name}</span>
