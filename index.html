@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.124 — Dj Petrik</title>
+<title>VinylBase v2.125 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.124</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.125</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -272,6 +272,10 @@
     <button class="nav-item" id="nav-comparador" onclick="setView('comparador')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
       Comparador
+    </button>
+    <button class="nav-item" id="nav-normalizados" onclick="setView('normalizados')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M15 3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1z"/><path d="M9.5 8.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1z"/></svg>
+      Normalizados
     </button>
     <div class="nav-section">DJ</div>
     <button class="nav-item" id="nav-sesiones" onclick="setView('sesiones')">
@@ -469,6 +473,11 @@ async function restoreDirHandles() {
     colaAnadirDirHandle = ca;
     colaAnadirGranted = (await ca.queryPermission({ mode: 'readwrite' })) === 'granted';
   }
+  const nz = await loadDirHandle('normalizados');
+  if (nz) {
+    normDirHandle = nz;
+    normGranted = (await nz.queryPermission({ mode: 'readwrite' })) === 'granted';
+  }
 }
 
 async function reconnectDir(kind) {
@@ -477,6 +486,7 @@ async function reconnectDir(kind) {
     music1: { handle: musicDirHandle,  mode: 'read' },
     music2: { handle: musicDirHandle2, mode: 'read' },
     colaAnadir: { handle: colaAnadirDirHandle, mode: 'readwrite' },
+    normalizados: { handle: normDirHandle, mode: 'readwrite' },
   };
   const { handle, mode } = map[kind];
   if (!handle) return;
@@ -486,7 +496,8 @@ async function reconnectDir(kind) {
       if (kind === 'root') rootDirGranted = true;
       else if (kind === 'music1') musicDirGranted = true;
       else if (kind === 'music2') musicDir2Granted = true;
-      else colaAnadirGranted = true;
+      else if (kind === 'colaAnadir') colaAnadirGranted = true;
+      else normGranted = true;
       showToast('✓ Acceso reconectado: ' + handle.name);
     } else {
       showToast('⚠ No se concedió acceso', true);
@@ -609,6 +620,8 @@ let cortadorFileHandle = null;
 let cortadorOutDirHandle = null;
 let colaAnadirDirHandle = null;   // carpeta compartida donde se dejan los .json pendientes de guardar en el Sheet
 let colaAnadirGranted = false;
+let normDirHandle = null;         // carpeta donde guardas los WAV ya recortados/normalizados en Audition
+let normGranted = false;
 let cortadorRunning = false;
 let cortadorLog = [];
 let cortadorSessionDiscs = []; // [{row, cleanId}] en el orden en que se ripearon
@@ -697,6 +710,17 @@ async function pickColaAnadirDir() {
     colaAnadirGranted = true;
     await saveDirHandle('colaAnadir', colaAnadirDirHandle);
     showToast('✓ Carpeta de cola conectada: ' + colaAnadirDirHandle.name);
+    if (view === 'config') renderConfig();
+  } catch(e) { /* selección cancelada */ }
+}
+
+async function pickNormalizadosDir() {
+  try {
+    normDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    normGranted = true;
+    await saveDirHandle('normalizados', normDirHandle);
+    showToast('✓ Carpeta de normalizados conectada: ' + normDirHandle.name);
+    if (view === 'normalizados') renderNormalizados();
     if (view === 'config') renderConfig();
   } catch(e) { /* selección cancelada */ }
 }
@@ -3003,6 +3027,176 @@ function renderComparador() {
   `;
 }
 
+// ─── NORMALIZADOS (aplica los WAV ya recortados/normalizados en Audition a sus carpetas) ──
+// Flujo: cortas con el Cortador → los archivos van a Audition para recortar puntas y
+// normalizar → se guardan con el MISMO nombre en una carpeta aparte (normalizados) →
+// esta pantalla busca cada archivo de esa carpeta dentro de las carpetas de vinilos (bajo
+// tu Carpeta raíz) por nombre, y si hay una única coincidencia, lo pega ahí (sobrescribe
+// el crudo) y lo borra de la carpeta de normalizados — el "Ctrl+X / Ctrl+V" de siempre,
+// pero solo. Como los nombres son "Artista - Título.wav", en la práctica son únicos por
+// tema, así que emparejar por nombre es seguro (mismo criterio que ya usa el Comparador).
+let normScanning = false;
+let normResults = null;   // { listos: [], ambiguos: [], sinPareja: [] }
+let normSel = new Set();
+let normError = null;
+let normBusy = false;
+let normBusyMsg = '';
+
+async function escanearCarpetaNormalizados(dirHandle, prefix, out) {
+  for await (const [name, handle] of dirHandle.entries()) {
+    const relPath = prefix ? prefix + '/' + name : name;
+    if (handle.kind === 'directory') {
+      await escanearCarpetaNormalizados(handle, relPath, out);
+    } else {
+      if (!/\.(wav|flac|mp3)$/i.test(name)) continue;
+      let size = 0;
+      try { const f = await handle.getFile(); size = f.size; } catch(e) {}
+      out.push({ relPath, name, size, handle, parentHandle: dirHandle });
+    }
+  }
+}
+
+async function ejecutarBusquedaNormalizados() {
+  if (!rootDirHandle) { showToast('⚠ No tienes la Carpeta raíz conectada — ve a Configuración', true); return; }
+  if (!normDirHandle) { showToast('⚠ Elige antes la carpeta de normalizados', true); return; }
+  normScanning = true; normError = null; normResults = null; normSel.clear();
+  renderNormalizados();
+  try {
+    const enRoot = [], normalizados = [];
+    await escanearCarpetaNormalizados(rootDirHandle, '', enRoot);
+    await escanearCarpetaNormalizados(normDirHandle, '', normalizados);
+
+    // Mapa nombre -> lista de sitios donde existe ese nombre dentro de las carpetas de vinilos
+    const mapaRoot = new Map();
+    for (const e of enRoot) {
+      const clave = e.name.toLowerCase();
+      if (!mapaRoot.has(clave)) mapaRoot.set(clave, []);
+      mapaRoot.get(clave).push(e);
+    }
+
+    const listos = [], ambiguos = [], sinPareja = [];
+    for (const nrm of normalizados) {
+      const candidatos = mapaRoot.get(nrm.name.toLowerCase()) || [];
+      if (candidatos.length === 0) sinPareja.push(nrm);
+      else if (candidatos.length === 1) listos.push({ origen: nrm, destino: candidatos[0] });
+      else ambiguos.push({ origen: nrm, candidatos });
+    }
+    listos.sort((a, b) => a.origen.name.localeCompare(b.origen.name, 'es'));
+    sinPareja.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    normResults = { listos, ambiguos, sinPareja };
+  } catch(e) {
+    console.error('[Normalizados] error', e);
+    normError = (e.name ? e.name + ': ' : '') + e.message;
+  }
+  normScanning = false;
+  renderNormalizados();
+}
+
+function toggleSelNormalizados(relPath) {
+  if (normSel.has(relPath)) normSel.delete(relPath); else normSel.add(relPath);
+  renderNormalizados();
+}
+function seleccionarTodosNormalizados(valor) {
+  normSel.clear();
+  if (valor) normResults.listos.forEach(m => normSel.add(m.origen.relPath));
+  renderNormalizados();
+}
+
+async function aplicarNormalizadosSeleccionados() {
+  const seleccionados = normResults.listos.filter(m => normSel.has(m.origen.relPath));
+  if (!seleccionados.length) { showToast('⚠ No has marcado ningún archivo', true); return; }
+  if (!confirm(`Vas a pegar ${seleccionados.length} archivo(s) normalizado(s) en su carpeta de vinilo, sobrescribiendo el crudo, y a borrarlos de "${normDirHandle.name}".\n\n¿Seguro?`)) return;
+
+  normBusy = true; normBusyMsg = `Aplicando 0/${seleccionados.length}...`;
+  renderNormalizados();
+  let hechos = 0, errores = 0;
+  const hechosRelPaths = [];
+  for (const m of seleccionados) {
+    try {
+      const file = await m.origen.handle.getFile();
+      const buf = await file.arrayBuffer();
+      const destinoHandle = await m.destino.parentHandle.getFileHandle(m.destino.name, { create: true });
+      const writable = await destinoHandle.createWritable();
+      await writable.write(buf);
+      await writable.close();
+      await m.origen.parentHandle.removeEntry(m.origen.name);
+      hechos++;
+      hechosRelPaths.push(m.origen.relPath);
+    } catch(e) {
+      console.error('[Normalizados] error aplicando', m.origen.relPath, e);
+      errores++;
+    }
+    normBusyMsg = `Aplicando ${hechos + errores}/${seleccionados.length}...`;
+    renderNormalizados();
+  }
+  normBusy = false;
+  showToast(`✓ ${hechos} aplicado(s)${errores ? `, ${errores} con error` : ''}`);
+  normResults.listos = normResults.listos.filter(m => !hechosRelPaths.includes(m.origen.relPath));
+  normSel.clear();
+  renderNormalizados();
+}
+
+function renderNormalizados() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="content-header">
+      <div style="font-weight:600">🎚️ Aplicar normalizados</div>
+    </div>
+    <div style="padding:16px;overflow-y:auto;height:calc(100% - 50px)">
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Busca, dentro de tu Carpeta raíz, las carpetas de vinilo que corresponden a los archivos ya recortados/normalizados en Audition (por nombre) y los pega ahí, sobrescribiendo el crudo y borrándolos de esta carpeta.</p>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
+        <span style="font-size:12px;color:var(--text3)">📁 Carpeta raíz: ${rootDirHandle ? rootDirHandle.name : 'no conectada (ve a Configuración)'}</span>
+        <button class="btn" onclick="pickNormalizadosDir()">🎚️ Carpeta de normalizados: ${normDirHandle ? normDirHandle.name : 'elegir...'}</button>
+        ${normDirHandle && !normGranted ? `<button class="btn btn-accent" onclick="reconnectDir('normalizados')">🔄 Reconectar</button>` : ''}
+        <button class="btn btn-accent" ${(!rootDirHandle || !normDirHandle || normScanning) ? 'disabled' : ''} onclick="ejecutarBusquedaNormalizados()">🔍 Buscar coincidencias</button>
+      </div>
+
+      ${normScanning ? `<p style="font-size:12px;color:var(--text3)">Escaneando...</p>` : ''}
+      ${normBusy ? `<p style="font-size:12px;color:var(--accent)">${normBusyMsg}</p>` : ''}
+      ${normError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${normError}</p>` : ''}
+
+      ${normResults ? `
+        <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+          Listos para aplicar: <b>${normResults.listos.length}</b> · Ambiguos: <b>${normResults.ambiguos.length}</b> · Sin pareja: <b>${normResults.sinPareja.length}</b>
+        </div>
+
+        <div class="d-section" style="margin-bottom:6px">✓ Listos para aplicar</div>
+        ${!normResults.listos.length ? '<p style="font-size:12px;color:var(--text3);padding:10px">Nada listo</p>' : `
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:11px">
+            <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosNormalizados(true)">Marcar todos (${normResults.listos.length})</button>
+            <button class="btn" style="font-size:11px;padding:3px 8px" onclick="seleccionarTodosNormalizados(false)">Ninguno</button>
+            <span style="color:var(--text3)">${normSel.size} marcado(s)</span>
+          </div>
+          <button class="btn btn-accent" style="font-size:11px;margin-bottom:8px" ${normBusy ? 'disabled' : ''} onclick="aplicarNormalizadosSeleccionados()">📋 Aplicar marcados (pegar y borrar de origen)</button>
+          <div class="tracklist" style="max-height:280px;overflow-y:auto;margin-bottom:16px">
+            ${normResults.listos.map(m => `<div class="track-row" style="cursor:pointer" onclick="toggleSelNormalizados(${JSON.stringify(m.origen.relPath)})">
+              <input type="checkbox" ${normSel.has(m.origen.relPath) ? 'checked' : ''} onclick="event.stopPropagation();toggleSelNormalizados(${JSON.stringify(m.origen.relPath)})">
+              <span class="track-title" style="flex:1;font-size:12px">${m.origen.name} <span style="color:var(--text3)">→</span> ${m.destino.relPath}</span>
+            </div>`).join('')}
+          </div>
+        `}
+
+        ${normResults.ambiguos.length ? `
+          <div class="d-section" style="margin-bottom:6px">⚠ Ambiguos (mismo nombre en varias carpetas — resuélvelos a mano)</div>
+          <div class="tracklist" style="max-height:200px;overflow-y:auto;margin-bottom:16px">
+            ${normResults.ambiguos.map(a => `<div class="track-row" style="flex-direction:column;align-items:flex-start">
+              <span class="track-title" style="font-size:12px">${a.origen.name}</span>
+              <span style="font-size:11px;color:var(--text3)">podría ser: ${a.candidatos.map(c => c.relPath).join(' · ')}</span>
+            </div>`).join('')}
+          </div>
+        ` : ''}
+
+        ${normResults.sinPareja.length ? `
+          <div class="d-section" style="margin-bottom:6px">? Sin pareja (no encontrado en ninguna carpeta de vinilo)</div>
+          <div class="tracklist" style="max-height:200px;overflow-y:auto">
+            ${normResults.sinPareja.map(e => `<div class="track-row"><span class="track-title" style="font-size:12px">${e.relPath}</span></div>`).join('')}
+          </div>
+        ` : ''}
+      ` : ''}
+    </div>
+  `;
+}
+
 // ─── VERIFICAR DIGITAL (comparar discos digitales del Sheet contra tu carpeta de música) ──
 // Igual que "Verificar ripeados" pero para lo que NO es vinilo físico: usa el mismo índice
 // de etiquetas ID3 que ya usa "¿Tengo este tema?", así que reconoce los archivos igual de
@@ -3550,6 +3744,7 @@ function renderView() {
   if (view === 'auditoriadigital') { renderAuditoriaDigital(); return; }
   if (view === 'explorador') { renderExplorador(); return; }
   if (view === 'comparador') { renderComparador(); return; }
+  if (view === 'normalizados') { renderNormalizados(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
@@ -4008,6 +4203,18 @@ function renderConfig() {
           </button>
           ${colaAnadirDirHandle && !colaAnadirGranted ? `<button class="btn btn-accent" onclick="reconnectDir('colaAnadir')">🔄 Reconectar</button>` : ''}
           <span style="font-size:12px;color:var(--text3)">${colaAnadirDirHandle ? '📁 ' + colaAnadirDirHandle.name + (colaAnadirGranted ? '' : ' (pulsa Reconectar)') : 'Sin carpeta seleccionada'}</span>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>Carpeta de archivos normalizados (Audition)</h3>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Donde guardas los WAV ya recortados/normalizados con el mismo nombre — la usa la pantalla "Normalizados" para pegarlos solos en su carpeta de vinilo.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" onclick="pickNormalizadosDir()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Elegir carpeta de normalizados
+          </button>
+          ${normDirHandle && !normGranted ? `<button class="btn btn-accent" onclick="reconnectDir('normalizados')">🔄 Reconectar</button>` : ''}
+          <span style="font-size:12px;color:var(--text3)">${normDirHandle ? '📁 ' + normDirHandle.name + (normGranted ? '' : ' (pulsa Reconectar)') : 'Sin carpeta seleccionada'}</span>
         </div>
       </div>
       <div class="config-section">
