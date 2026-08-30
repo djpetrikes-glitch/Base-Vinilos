@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.120 — Dj Petrik</title>
+<title>VinylBase v2.121 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.120</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.121</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1997,6 +1997,18 @@ function buildDiscFolderName(row) {
 function abrirAyudanteCaratulas() {
   const a = document.createElement('a');
   a.href = 'vinylbase-caratulas:run';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// Igual que abrirAyudanteCaratulas, pero le dice al ayudante que procese la cola de
+// discos pendientes de guardar en el Sheet en vez de poner carátulas — se llama sola
+// en cuanto un disco nuevo queda bien puesto en la cola.
+function abrirAyudanteAnadirSheet() {
+  const a = document.createElement('a');
+  a.href = 'vinylbase-caratulas:sheet';
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -5102,7 +5114,8 @@ async function ponerEnColaParaSheet(row) {
     const writable = await fh.createWritable();
     await writable.write(JSON.stringify(payload, null, 2));
     await writable.close();
-    showToast('✓ Disco añadido aquí y puesto en cola — ejecuta "Añadir a Sheet" cuando quieras para guardarlo de verdad');
+    showToast('✓ Disco añadido aquí y puesto en cola — avisando al programa para que lo guarde en el Sheet...');
+    abrirAyudanteAnadirSheet();
   } catch(e) {
     console.error('[Cola añadir] error', e);
     showToast('⚠ Disco añadido aquí, pero no se pudo dejar en la cola (' + e.message + ') — revisa el permiso de esa carpeta en Configuración', true);
