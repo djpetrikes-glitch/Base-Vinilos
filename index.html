@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.128 — Dj Petrik</title>
+<title>VinylBase v2.129 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.128</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.129</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -3066,6 +3066,17 @@ async function escanearCarpetaNormalizados(dirHandle, prefix, out) {
 // (embedTagsInWav mete álbum y título en cada WAV): primero se localiza la CARPETA por
 // álbum (comparación sin acentos/símbolos, porque Discogs siempre añade algo de más), y
 // dentro de esa carpeta ya acotada, el ARCHIVO concreto por título de la pista.
+function explicarErrorLecturaNormalizados(err) {
+  const msg = (err && err.message) || '';
+  if (err && err.name === 'NotReadableError') {
+    return 'No se pudo leer (puede estar aún sincronizándose en la nube, p.ej. OneDrive, o abierto en otro programa) — vuelve a intentarlo cuando esté disponible.';
+  }
+  if (err && err.name === 'NotFoundError') {
+    return 'Ya no existe en esa ubicación (¿se movió o se borró mientras tanto?).';
+  }
+  return 'Error leyendo el archivo: ' + (msg || (err && err.name) || 'desconocido');
+}
+
 async function leerTagsNormalizados(entry) {
   const file = await entry.handle.getFile();
   if (/\.wav$/i.test(entry.name)) {
@@ -3098,14 +3109,23 @@ async function ejecutarBusquedaNormalizados() {
 
     // Agrupamos por carpeta de vinilo (primer trozo de la ruta relativa) y leemos las
     // etiquetas de cada archivo para saber el álbum de esa carpeta y el título de cada pista.
+    // Un archivo que no se puede leer (sincronizándose en la nube, abierto en otro
+    // programa...) NO debe tirar abajo la búsqueda entera — se salta y se sigue con el resto.
     const carpetas = new Map(); // nombreCarpeta -> { albumNorm, archivos: [...] }
+    const noLeidosRoot = [];
     for (const e of enRoot) {
       const nombreCarpeta = e.relPath.split('/')[0];
       if (!carpetas.has(nombreCarpeta)) carpetas.set(nombreCarpeta, { albumNorm: '', archivos: [] });
-      const tags = await leerTagsNormalizados(e);
       const grupo = carpetas.get(nombreCarpeta);
-      if (!grupo.albumNorm && tags.album) grupo.albumNorm = tags.album;
-      grupo.archivos.push({ ...e, titleNorm: tags.title });
+      try {
+        const tags = await leerTagsNormalizados(e);
+        if (!grupo.albumNorm && tags.album) grupo.albumNorm = tags.album;
+        grupo.archivos.push({ ...e, titleNorm: tags.title });
+      } catch(err) {
+        console.error('[Normalizados] no se pudo leer', e.relPath, err);
+        grupo.archivos.push({ ...e, titleNorm: null });
+        noLeidosRoot.push({ relPath: e.relPath, motivo: explicarErrorLecturaNormalizados(err) });
+      }
       normKeyDone++;
       if (normKeyDone % 15 === 0) renderNormalizados();
     }
@@ -3120,7 +3140,16 @@ async function ejecutarBusquedaNormalizados() {
 
     const listos = [], ambiguos = [], revisar = [], sinPareja = [];
     for (const nrm of normalizados) {
-      const tagsNrm = await leerTagsNormalizados(nrm);
+      let tagsNrm;
+      try {
+        tagsNrm = await leerTagsNormalizados(nrm);
+      } catch(err) {
+        console.error('[Normalizados] no se pudo leer', nrm.relPath, err);
+        sinPareja.push({ ...nrm, motivo: explicarErrorLecturaNormalizados(err) });
+        normKeyDone++;
+        if (normKeyDone % 15 === 0) renderNormalizados();
+        continue;
+      }
       normKeyDone++;
       if (normKeyDone % 15 === 0) renderNormalizados();
 
@@ -3144,7 +3173,7 @@ async function ejecutarBusquedaNormalizados() {
     sinPareja.sort((a, b) => a.name.localeCompare(b.name, 'es'));
     enRoot.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
     normalizados.sort((a, b) => a.relPath.localeCompare(b.relPath, 'es'));
-    normResults = { listos, ambiguos, revisar, sinPareja, enRoot, normalizados };
+    normResults = { listos, ambiguos, revisar, sinPareja, enRoot, normalizados, noLeidosRoot };
     normSel = new Set(listos.map(m => m.origen.relPath)); // pre-marcados: es el caso normal, no ambiguo
   } catch(e) {
     console.error('[Normalizados] error', e);
@@ -3219,6 +3248,7 @@ function renderNormalizados() {
       ${normError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${normError}</p>` : ''}
 
       ${normResults ? `
+        ${normResults.noLeidosRoot.length ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px;margin-bottom:10px">⚠ ${normResults.noLeidosRoot.length} archivo(s) de tu Carpeta raíz no se pudieron leer, así que puede que algún álbum no se haya detectado bien:<br>${normResults.noLeidosRoot.map(e => `${e.relPath} — ${e.motivo}`).join('<br>')}</p>` : ''}
         <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
           Encontrados: <b>${normResults.enRoot.length}</b> en la Carpeta raíz · <b>${normResults.normalizados.length}</b> en normalizados
           ${normResults.revisar.length ? ` · <b style="color:var(--accent)">${normResults.revisar.length} a revisar</b>` : ''}
