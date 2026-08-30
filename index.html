@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.135 — Dj Petrik</title>
+<title>VinylBase v2.136 — Dj Petrik</title>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
@@ -232,7 +232,7 @@
     <div class="logo">
       <div class="logo-title">Vinyl<span>Base</span></div>
       <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.135</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.136</div>
     </div>
     <div class="nav-section">Buscador</div>
     <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
@@ -1316,7 +1316,15 @@ function computeDefaultAssignments(segments, expectedDurations) {
   dp[0][0] = 0;
   for (let i = 1; i <= N; i++) {
     for (let j = 0; j <= M; j++) {
-      if (dp[i - 1][j] < dp[i][j]) { dp[i][j] = dp[i - 1][j]; choice[i][j] = { type: 'delete' }; }
+      // Borrar un trozo detectado NO es gratis. Por debajo de ~15s (ruido real: clics,
+      // aguja...) sigue siendo barato, igual que antes. Por encima de eso, se vuelve muy
+      // caro — así el algoritmo nunca prefiere tirar una canción entera solo porque "encaje
+      // mejor" en duración con algún hueco; antes esto podía perder minutos de audio real
+      // sin ningún motivo para evitarlo.
+      const durTrozo = segments[i - 1].endSec - segments[i - 1].startSec;
+      const UMBRAL_RUIDO_SEC = 15;
+      const costeBorrar = durTrozo <= UMBRAL_RUIDO_SEC ? durTrozo : durTrozo * 20;
+      if (dp[i - 1][j] + costeBorrar < dp[i][j]) { dp[i][j] = dp[i - 1][j] + costeBorrar; choice[i][j] = { type: 'delete' }; }
       if (j >= 1) {
         let sumDur = 0;
         for (let k = i - 1; k >= 0; k--) {
