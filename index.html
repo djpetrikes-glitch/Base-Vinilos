@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.17 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.18 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.17</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.18</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -627,8 +627,9 @@ async function changeRootDir() {
 
 async function getRootDir() {
   if (rootDirHandle) {
-    const perm = await rootDirHandle.queryPermission({ mode: 'readwrite' });
-    if (perm === 'granted') return rootDirHandle;
+    let perm = await rootDirHandle.queryPermission({ mode: 'readwrite' });
+    if (perm !== 'granted') perm = await rootDirHandle.requestPermission({ mode: 'readwrite' });
+    if (perm === 'granted') { rootDirGranted = true; return rootDirHandle; }
   }
   try {
     rootDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -687,8 +688,9 @@ async function changeMusicDir2() {
 
 async function getMusicDir() {
   if (musicDirHandle) {
-    const perm = await musicDirHandle.queryPermission({ mode: 'read' });
-    if (perm === 'granted') return musicDirHandle;
+    let perm = await musicDirHandle.queryPermission({ mode: 'read' });
+    if (perm !== 'granted') perm = await musicDirHandle.requestPermission({ mode: 'read' });
+    if (perm === 'granted') { musicDirGranted = true; return musicDirHandle; }
   }
   try {
     musicDirHandle = await window.showDirectoryPicker({ mode: 'read' });
@@ -706,8 +708,9 @@ async function getMusicDir() {
 // La segunda carpeta es opcional: solo se usa si ya está elegida, nunca fuerza el selector
 async function getMusicDir2() {
   if (musicDirHandle2) {
-    const perm = await musicDirHandle2.queryPermission({ mode: 'read' });
-    if (perm === 'granted') return musicDirHandle2;
+    let perm = await musicDirHandle2.queryPermission({ mode: 'read' });
+    if (perm !== 'granted') perm = await musicDirHandle2.requestPermission({ mode: 'read' });
+    if (perm === 'granted') { musicDir2Granted = true; return musicDirHandle2; }
   }
   return null;
 }
@@ -3398,6 +3401,14 @@ async function obtenerCarpetasDeRootConCache(forzar) {
 async function ejecutarBusquedaNormalizados(forzarRecuento) {
   if (!rootDirHandle) { showToast('⚠ No tienes la Carpeta raíz conectada — ve a Configuración', true); return; }
   if (!normDirHandle) { showToast('⚠ Elige antes la carpeta de normalizados', true); return; }
+  let permRoot = await rootDirHandle.queryPermission({ mode: 'readwrite' });
+  if (permRoot !== 'granted') permRoot = await rootDirHandle.requestPermission({ mode: 'readwrite' });
+  if (permRoot !== 'granted') { rootDirGranted = false; showToast('⚠ Falta permiso sobre la Carpeta raíz — dale a "Reconectar" en Configuración', true); return; }
+  rootDirGranted = true;
+  let permNorm = await normDirHandle.queryPermission({ mode: 'readwrite' });
+  if (permNorm !== 'granted') permNorm = await normDirHandle.requestPermission({ mode: 'readwrite' });
+  if (permNorm !== 'granted') { normGranted = false; showToast('⚠ Falta permiso sobre la carpeta de normalizados — dale a "Reconectar" en Configuración', true); return; }
+  normGranted = true;
   normScanning = true; normError = null; normResults = null; normSel.clear();
   normKeyPhase = false; normKeyDone = 0; normKeyTotal = 0;
   renderNormalizados();
@@ -5464,6 +5475,12 @@ async function handleCortadorTrackDrop(event, discIdx, trackIdx) {
   }
   if (!cortadorOutDirHandle) {
     showToast('⚠ Antes elige la carpeta de salida (paso 2)', true);
+    return;
+  }
+  let permOut = await cortadorOutDirHandle.queryPermission({ mode: 'readwrite' });
+  if (permOut !== 'granted') permOut = await cortadorOutDirHandle.requestPermission({ mode: 'readwrite' });
+  if (permOut !== 'granted') {
+    showToast('⚠ Falta permiso sobre la carpeta de salida — vuelve a elegirla en el paso 2', true);
     return;
   }
   const tracks = getTracksForSessionDisc(discIdx);
