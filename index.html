@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.6 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.7 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -175,10 +175,11 @@
   @keyframes fadeup { from { opacity:0; transform: translateX(-50%) translateY(8px); } to { opacity:1; transform: translateX(-50%) translateY(0); } }
 
   /* Config panel */
-  .config-panel { padding: 20px; max-width: 500px; }
+  .config-panel { padding: 24px 32px; overflow-y: auto; }
   .config-panel h2 { font-family: var(--font-display); font-size: 19px; font-weight: 700; margin-bottom: 4px; }
-  .config-panel p { font-size: 12px; color: var(--text2); margin-bottom: 20px; line-height: 1.6; }
-  .config-section { margin-bottom: 20px; }
+  .config-panel > p { font-size: 12px; color: var(--text2); margin-bottom: 20px; line-height: 1.6; max-width: 720px; }
+  .config-panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
+  .config-section { margin-bottom: 0; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
   .config-section h3 { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); margin-bottom: 10px; }
 
 
@@ -313,7 +314,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.6</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.7</span></h1>
       </div>
     </div>
     <div class="header-right">
@@ -3803,6 +3804,10 @@ async function borrarDeAuditoriaDigital(idx) {
   const row = allData[idx];
   if (!row) return;
   const nombre = `${g(row, COL.artist)} — ${g(row, COL.title)}`;
+  if (!g(row, COL.release_id) && !(g(row, COL.artist) && g(row, COL.title))) {
+    showToast('⚠ No puedo identificar esta fila con seguridad en el Sheet (sin release_id ni artista+título) — bórrala a mano.', true);
+    return;
+  }
   if (!confirm(`¿Seguro que quieres borrar esta línea del Sheet?\n\n${nombre}\n\nEsto no se puede deshacer.`)) return;
 
   showToast('Borrando...');
@@ -4663,6 +4668,7 @@ function renderConfig() {
       <h2>Configuración</h2>
       <p>Conectado a Google Sheets — los cambios se guardan directamente en tu hoja. Tu amigo Paquillo puede acceder desde su navegador con el mismo enlace.</p>
 
+      <div class="config-panel-grid">
       <div class="config-section">
         <h3>Google Sheet</h3>
         <div class="field-g" style="margin-bottom:10px">
@@ -4773,6 +4779,7 @@ function renderConfig() {
         </div>
       </div>
       ${renderResetRipeadosSection()}
+      </div>
     </div>`;
 }
 
@@ -5667,9 +5674,9 @@ async function verifySaved(row, fields) {
   }
 }
 
-// ⚠ Requiere que tu Apps Script reconozca action:'delete' y borre esa fila — si tu script
-// actual solo sabe actualizar campos, esto no hará nada hasta que se lo añadas (pídele a
-// Claude que te escriba ese trozo si hace falta, pasándole tu código de Apps Script actual).
+// ⚠ Requiere que tu Apps Script reconozca action:'delete' y borre esa fila (ya lo tiene).
+// Manda también artista/título — hace falta para los discos sin release_id (los digitales
+// que no vienen de Discogs), que si no, nunca se pueden identificar en el Sheet para borrar.
 async function deleteFromSheet(row) {
   return fetch(APPS_SCRIPT_URL, {
     method: 'POST',
@@ -5677,6 +5684,8 @@ async function deleteFromSheet(row) {
     headers: { 'Content-Type': 'text/plain' },
     body: JSON.stringify({
       releaseId: g(row, COL.release_id),
+      artist: g(row, COL.artist),
+      title: g(row, COL.title),
       action: 'delete',
     }),
   });
@@ -5701,8 +5710,8 @@ async function borrarDiscoDesdeFicha(idx) {
   const row = allData[idx];
   if (!row) return;
   const nombre = `${g(row, COL.artist)} — ${g(row, COL.title)}`;
-  if (!g(row, COL.release_id)) {
-    showToast('⚠ Este disco no tiene release_id — no puedo identificarlo con seguridad en el Sheet. Bórralo directamente ahí, a mano.', true);
+  if (!g(row, COL.release_id) && !(g(row, COL.artist) && g(row, COL.title))) {
+    showToast('⚠ No puedo identificar esta fila con seguridad en el Sheet (sin release_id ni artista+título) — bórrala a mano.', true);
     return;
   }
   if (!confirm(`¿Seguro que quieres borrar esta línea del Sheet?\n\n${nombre}\n\nEsto no se puede deshacer.`)) return;
@@ -5729,14 +5738,25 @@ async function borrarDiscoDesdeFicha(idx) {
   }
 }
 
+// Comprueba igual que busca tu Apps Script (encontrarFila): por release_id si lo hay,
+// si no por artista+título. Antes solo miraba release_id — dos discos sin release_id (los
+// digitales sueltos) tienen ambos "" ahí, así que cualquiera de los dos daba un falso
+// positivo de "ya está borrado" aunque el que de verdad querías borrar siguiera en el Sheet.
 async function verifyDeleted(row) {
   try {
     const res = await fetch(APPS_SCRIPT_URL, { method: 'GET' });
     const json = await res.json();
     if (!json.ok) return false;
     const releaseId = g(row, COL.release_id);
+    const artist = g(row, COL.artist);
+    const title = g(row, COL.title);
     const dataRows = json.data.slice(1);
-    return !dataRows.some(r => String(r[COL.release_id] ?? '').trim() === releaseId);
+    return !dataRows.some(r => {
+      if (releaseId) return String(r[COL.release_id] ?? '').trim() === releaseId;
+      return artist && title
+        && String(r[COL.artist] ?? '').trim() === artist
+        && String(r[COL.title] ?? '').trim() === title;
+    });
   } catch(e) {
     return false;
   }
@@ -5903,6 +5923,9 @@ async function addRecord() {
 
   allData.unshift(row);
   closeModal();
+  seccion = null;
+  view = null;
+  renderTabsL1();
   renderStats();
   renderView();
 
@@ -6289,23 +6312,11 @@ function renderTopMenu() {
 
 function renderTabsL1() {
   const el = document.getElementById('tabs-l1');
-  let center = '';
-  if (!seccion) {
-    center = '';
-  } else if (!view) {
-    center = Object.entries(SECTIONS).map(([id, s]) => `
-      <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
-        <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
-      </button>
-    `).join('');
-  } else {
-    const s = SECTIONS[seccion];
-    center = s.views.map(v => `
-      <button class="vb-tab-l1 ${view === v.id ? 'active' : ''}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
-        <span class="dot"></span>${v.label}
-      </button>
-    `).join('');
-  }
+  const center = Object.entries(SECTIONS).map(([id, s]) => `
+    <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
+      <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
+    </button>
+  `).join('');
   el.innerHTML = `
     <div class="vb-tabs-l1-side"></div>
     <div class="vb-tabs-l1-center">${center}</div>
