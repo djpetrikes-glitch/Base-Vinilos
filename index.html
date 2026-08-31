@@ -3,54 +3,48 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v2.138 — Dj Petrik</title>
+<title>VinylBase v3.0 — Dj Petrik × Paquillo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
   :root {
-    --bg: #0f0f0f;
-    --bg2: #1a1a1a;
-    --bg3: #242424;
-    --bg4: #2e2e2e;
-    --border: #333;
-    --border2: #444;
-    --text: #e8e8e8;
-    --text2: #999;
-    --text3: #666;
-    --accent: #e8531a;
-    --accent-bg: rgba(232,83,26,0.12);
-    --accent-border: rgba(232,83,26,0.35);
-    --green: #22c55e;
-    --green-bg: rgba(34,197,94,0.12);
-    --amber: #f59e0b;
-    --amber-bg: rgba(245,158,11,0.12);
-    --blue: #3b82f6;
-    --blue-bg: rgba(59,130,246,0.12);
-    --red: #ef4444;
-    --red-bg: rgba(239,68,68,0.12);
-    --radius: 6px;
+    --bg: #F3F2ED;
+    --bg2: #FFFFFF;
+    --bg3: #ECEAE0;
+    --bg4: #DAD7C9;
+    --border: #DAD7C9;
+    --border2: #C7C4B4;
+    --text: #1F2421;
+    --text2: #5B615C;
+    --text3: #9AA0A6;
+    --accent: #2B5D66;
+    --accent-dark: #1D4048;
+    --accent-bg: #E4ECED;
+    --accent-border: rgba(43,93,102,0.35);
+    --green: #1D6F42;
+    --green-bg: #E3EFE7;
+    --amber: #C98A2A;
+    --amber-bg: #FBF2E1;
+    --blue: #7C8B57;
+    --blue-bg: #EEF1E4;
+    --red: #B23A1F;
+    --red-bg: #FBEAE4;
+    --stamp-grey: #9AA0A6;
+    --radius: 10px;
     --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: var(--font); background: var(--bg); color: var(--text); font-size: 13px; min-height: 100vh; }
   a { color: var(--accent); text-decoration: none; }
 
   /* Layout */
-  .app { display: flex; height: 100vh; overflow: hidden; }
-  .sidebar { width: 210px; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
-  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
-  /* Sidebar */
-  .logo { padding: 18px 16px 14px; border-bottom: 1px solid var(--border); }
-  .logo-title { font-size: 17px; font-weight: 700; letter-spacing: -0.5px; color: var(--text); }
-  .logo-title span { color: var(--accent); }
-  .logo-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
-  .nav-section { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--text3); padding: 14px 16px 5px; }
-  .nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 16px; font-size: 13px; color: var(--text2); cursor: pointer; border: none; background: none; width: 100%; text-align: left; transition: color .15s, background .15s; }
-  .nav-item:hover { background: var(--bg3); color: var(--text); }
-  .nav-item.active { color: var(--accent); background: var(--accent-bg); font-weight: 500; }
-  .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; opacity: .7; }
-  .nav-item.active svg { opacity: 1; }
-  .sidebar-bottom { margin-top: auto; padding: 14px 16px; border-top: 1px solid var(--border); }
+  /* Stats (ahora viven en el header, junto al reloj) */
   .stat-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
   .stat-row span:first-child { color: var(--text2); }
   .stat-row span:last-child { color: var(--text); font-weight: 500; }
@@ -60,7 +54,7 @@
 
   /* Topbar */
   .topbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-  .page-title { font-size: 14px; font-weight: 600; color: var(--text); min-width: 80px; }
+  .page-title { font-family: var(--font-display); font-size: 16px; font-weight: 700; color: var(--text); min-width: 80px; }
   .search-box { flex: 1; display: flex; align-items: center; gap: 8px; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 10px; height: 32px; max-width: 400px; }
   .search-box input { flex: 1; border: none; background: none; outline: none; font-size: 13px; color: var(--text); }
   .search-box input::placeholder { color: var(--text3); }
@@ -68,12 +62,12 @@
   .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500; border-radius: var(--radius); cursor: pointer; border: 1px solid var(--border2); background: var(--bg3); color: var(--text); transition: all .15s; white-space: nowrap; }
   .btn:hover { background: var(--bg4); border-color: var(--border2); }
   .btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .btn-accent:hover { background: #d4461a; border-color: #d4461a; }
+  .btn-accent:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
   .btn svg { width: 14px; height: 14px; }
 
   /* Filters */
   .filters { display: flex; align-items: center; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg2); flex-wrap: wrap; flex-shrink: 0; }
-  .chip { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .chip { font-family: var(--font-mono); padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; transition: all .15s; white-space: nowrap; }
   .chip:hover { border-color: var(--border2); color: var(--text); }
   .chip.on { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border); }
   .filter-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
@@ -85,7 +79,7 @@
   .table-wrap::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   thead { position: sticky; top: 0; background: var(--bg2); z-index: 2; }
-  th { padding: 8px 10px; font-size: 10px; font-weight: 600; color: var(--text3); text-align: left; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .07em; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; }
+  th { font-family: var(--font-mono); padding: 8px 10px; font-size: 10px; font-weight: 600; color: var(--text3); text-align: left; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .07em; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; }
   th:hover { color: var(--text2); }
   td { padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   tr:hover td { background: var(--bg3); }
@@ -93,7 +87,7 @@
   tr.selected:hover td { background: var(--accent-bg); }
 
   /* Badges */
-  .badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 20px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .badge { font-family: var(--font-mono); display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 20px; font-size: 10px; font-weight: 600; white-space: nowrap; }
   .badge-green { background: var(--green-bg); color: var(--green); }
   .badge-amber { background: var(--amber-bg); color: var(--amber); }
   .badge-gray { background: var(--bg4); color: var(--text3); }
@@ -104,10 +98,10 @@
   /* Avatar */
   .avatar { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; font-size: 9px; font-weight: 700; flex-shrink: 0; }
   .av-you { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent-border); }
-  .av-paquillo { background: var(--blue-bg); color: var(--blue); border: 1px solid rgba(59,130,246,.3); }
+  .av-paquillo { background: var(--blue-bg); color: var(--blue); border: 1px solid rgba(124,139,87,.35); }
 
   /* Detail panel */
-  .detail { width: 280px; background: var(--bg2); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+  .detail { width: 340px; background: var(--bg2); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
   .detail::-webkit-scrollbar { width: 4px; }
   .detail::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 2px; }
   .detail-cover { width: 100%; aspect-ratio: 1; background: var(--bg3); display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; overflow: hidden; }
@@ -119,7 +113,7 @@
   .d-catalog { font-size: 10px; color: var(--text3); font-family: monospace; margin-bottom: 4px; }
   .d-artist { font-size: 11px; color: var(--text2); margin-bottom: 3px; }
   .d-title { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.3; margin-bottom: 14px; }
-  .d-section { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); margin: 14px 0 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .d-section { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); margin: 14px 0 8px; padding-top: 12px; border-top: 1px solid var(--border); }
   .d-field { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .d-label { font-size: 11px; color: var(--text3); }
   .d-val { font-size: 12px; color: var(--text); font-weight: 500; text-align: right; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -133,25 +127,25 @@
   .ripper-opt { flex: 1; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg3); color: var(--text2); font-size: 11px; font-weight: 500; cursor: pointer; text-align: center; transition: all .15s; }
   .ripper-opt:hover { border-color: var(--border2); color: var(--text); }
   .ripper-opt.on-you { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border); }
-  .ripper-opt.on-paquillo { background: var(--blue-bg); color: var(--blue); border-color: rgba(59,130,246,.3); }
+  .ripper-opt.on-paquillo { background: var(--blue-bg); color: var(--blue); border-color: rgba(124,139,87,.35); }
 
   /* Digital estado selector */
   .dest-sel { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
   .dest-opt { flex: 1; padding: 5px 4px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg3); color: var(--text2); font-size: 10px; font-weight: 500; cursor: pointer; text-align: center; transition: all .15s; min-width: 60px; }
   .dest-opt:hover { border-color: var(--border2); }
-  .dest-opt.on-confirmado { background: var(--green-bg); color: var(--green); border-color: rgba(34,197,94,.3); }
-  .dest-opt.on-verificar { background: var(--amber-bg); color: var(--amber); border-color: rgba(245,158,11,.3); }
-  .dest-opt.on-no { background: var(--red-bg); color: var(--red); border-color: rgba(239,68,68,.3); }
+  .dest-opt.on-confirmado { background: var(--green-bg); color: var(--green); border-color: rgba(29,111,66,.3); }
+  .dest-opt.on-verificar { background: var(--amber-bg); color: var(--amber); border-color: rgba(201,138,42,.3); }
+  .dest-opt.on-no { background: var(--red-bg); color: var(--red); border-color: rgba(178,58,31,.3); }
 
   /* Modal */
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
   .modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; }
   .modal-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: var(--bg2); z-index: 1; }
-  .modal-head h2 { font-size: 15px; font-weight: 600; }
+  .modal-head h2 { font-family: var(--font-display); font-size: 17px; font-weight: 700; }
   .modal-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
   .modal-foot { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
   .field-g { display: flex; flex-direction: column; gap: 4px; }
-  .field-g label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); }
+  .field-g label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); }
   .field-g input, .field-g select { padding: 7px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg3); color: var(--text); width: 100%; outline: none; transition: border-color .15s; }
   .field-g input:focus, .field-g select:focus { border-color: var(--accent); }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -180,10 +174,10 @@
 
   /* Config panel */
   .config-panel { padding: 20px; max-width: 500px; }
-  .config-panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .config-panel h2 { font-family: var(--font-display); font-size: 19px; font-weight: 700; margin-bottom: 4px; }
   .config-panel p { font-size: 12px; color: var(--text2); margin-bottom: 20px; line-height: 1.6; }
   .config-section { margin-bottom: 20px; }
-  .config-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); margin-bottom: 10px; }
+  .config-section h3 { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); margin-bottom: 10px; }
 
 
   /* Tracklist */
@@ -218,6 +212,73 @@
   .kc.empty { background: var(--bg); border-color: var(--border); color: var(--bg); cursor: default; pointer-events: none; }
   .kc.occupied { background: var(--bg4); border-color: var(--border2); color: var(--text2); }
 
+  /* ─── Header ────────────────────────────────────────────────────── */
+  .vb-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--text); padding: 18px 24px 14px; gap: 16px; flex-wrap: wrap; background: var(--bg); flex-shrink: 0; }
+  .vb-header .eyebrow { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); font-weight: 700; display: block; margin-bottom: 2px; }
+  .vb-header h1 { font-family: var(--font-display); font-size: 24px; margin: 0; font-weight: 700; letter-spacing: -.01em; }
+  .vb-header h1 span.accent-txt { color: var(--accent); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .clock-block { display: flex; align-items: center; gap: 12px; font-family: var(--font-mono); border: 1.5px solid var(--text); border-radius: 20px; background: var(--bg2); padding: 6px 8px 6px 14px; }
+  .clock-date { display: flex; flex-direction: column; line-height: 1.2; }
+  .clock-date .d1 { font-size: 11px; font-weight: 700; text-transform: capitalize; }
+  .clock-date .d2 { font-size: 10px; color: var(--text3); }
+  .clock-time { font-size: 14px; font-weight: 700; color: var(--accent-dark); min-width: 48px; text-align: center; }
+  .config-square { width: 38px; height: 38px; border-radius: 10px; border: 1.5px solid var(--text); background: var(--bg2); color: var(--text); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background .15s, color .15s; }
+  .config-square:hover, .config-square.active { background: var(--text); color: var(--bg); }
+
+  /* ─── Sello (stamp) reutilizado en perfil y config ─────────────────── */
+  .tile-stamp { width: 56px; height: 56px; border-radius: 50%; border: 2px dashed var(--stamp-grey); background: rgba(255,255,255,.6); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 14px; transform: rotate(-9deg); flex-shrink: 0; }
+
+  /* ─── Pantalla de selección de perfil ───────────────────────────────── */
+  .perfil-screen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; padding: 40px 24px; overflow-y: auto; }
+  .perfil-intro { text-align: center; max-width: 440px; }
+  .perfil-intro h2 { font-family: var(--font-display); font-size: 22px; margin-bottom: 6px; }
+  .perfil-intro p { font-size: 13px; color: var(--text2); }
+  .perfil-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; width: 100%; max-width: 820px; }
+  .perfil-tile { background: var(--bg2); border: 1.5px solid var(--border); border-radius: 14px; padding: 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+  .perfil-tile:hover { transform: translateY(-3px); box-shadow: 0 10px 24px -8px rgba(31,36,33,.18); }
+  .perfil-tile[data-accent="accent"]:hover { border-color: var(--accent); }
+  .perfil-tile[data-accent="blue"]:hover { border-color: var(--blue); }
+  .perfil-tile[data-accent="amber"]:hover { border-color: var(--amber); }
+  .perfil-tile-name { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
+  .perfil-tile-desc { font-size: 11.5px; color: var(--text2); line-height: 1.4; }
+  .perfil-tile[data-accent="accent"] .tile-stamp { color: var(--accent-dark); border-color: var(--accent); }
+  .perfil-tile[data-accent="blue"] .tile-stamp { color: #4B5A32; border-color: var(--blue); }
+  .perfil-tile[data-accent="amber"] .tile-stamp { color: #8A5F12; border-color: var(--amber); }
+  .perfil-actual { font-family: var(--font-mono); font-size: 11px; color: var(--text2); background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 5px 12px; cursor: pointer; }
+  .perfil-actual:hover { border-color: var(--border2); color: var(--text); }
+
+  /* ─── Pestañas de dos niveles (sustituyen a la barra lateral) ──────── */
+  .app-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .vb-tabs-l1 { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; padding: 14px 24px 0; flex-shrink: 0; }
+  .vb-tabs-l1-center { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .vb-tabs-l1-side { display: flex; }
+  .vb-tabs-l1-side-right { justify-content: flex-end; }
+  .vb-tab-l1 { font-family: var(--font-display); font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 8px; background: var(--bg2); border: 1.5px solid var(--border); border-radius: 12px; padding: 10px 16px; cursor: pointer; color: var(--text2); transition: all .15s; }
+  .vb-tab-l1 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border2); flex-shrink: 0; }
+  .vb-tab-l1:hover { border-color: var(--border2); color: var(--text); }
+  .vb-tab-l1.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-dark); }
+  .vb-tab-l1.active .dot { background: var(--accent); }
+  .vb-tab-l1.construccion { opacity: .65; }
+
+  .vb-tabs-l2 { display: flex; gap: 6px; padding: 12px 24px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .vb-tab-l2 { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .vb-tab-l2:hover { border-color: var(--border2); color: var(--text); }
+  .vb-tab-l2.active { background: var(--accent-bg); color: var(--accent-dark); border-color: var(--accent-border); }
+  .vb-tab-l2-action { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
+  .vb-tab-l2-action:hover { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+  .header-stats { display: flex; align-items: center; gap: 16px; margin-left: auto; flex-wrap: wrap; }
+  .header-stats .stat-row { margin-bottom: 0; gap: 5px; font-family: var(--font-mono); }
+  .header-stats .progress-wrap { width: 70px; margin-top: 0; }
+  .header-stats .progress-label { margin-top: 0; }
+  .construccion-banner { font-family: var(--font-mono); font-size: 10.5px; color: var(--amber); background: var(--amber-bg); border-radius: 20px; padding: 3px 10px; margin-left: 6px; }
+
+  @media (max-width: 760px) {
+    .perfil-grid { grid-template-columns: 1fr; }
+    .clock-date .d2 { display: none; }
+    .header-stats { display: none; }
+  }
+
   /* Scrollbar global */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -227,77 +288,63 @@
 <body>
 
 <div class="app">
-  <!-- Sidebar -->
-  <div class="sidebar">
-    <div class="logo">
-      <div class="logo-title">Vinyl<span>Base</span></div>
-      <div class="logo-sub">Dj Petrik × Paquillo</div>
-      <div style="font-size:10px;color:var(--text3);margin-top:3px">v2.138</div>
+  <!-- Header -->
+  <header class="vb-header">
+    <div class="brand">
+      <span class="eyebrow" id="headerEyebrow">VinylBase</span>
+      <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.0</span></h1>
     </div>
-    <div class="nav-section">Buscador</div>
-    <button class="nav-item" id="nav-buscador" onclick="setView('buscador')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      ¿Tengo este tema?
-    </button>
-    <div class="nav-section">Biblioteca</div>
-    <button class="nav-item active" id="nav-vinilos" onclick="setView('vinilos')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6" stroke-dasharray="2 4"/></svg>
-      Vinilos
-    </button>
-    <button class="nav-item" id="nav-digital" onclick="setView('digital')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-      Digital
-    </button>
-    <button class="nav-item" id="nav-temasjuntos" onclick="setView('temasjuntos')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M7 8V6a5 5 0 0 1 10 0v2"/></svg>
-      Temas Juntos
-    </button>
-    <div class="nav-section">Herramientas</div>
-    <button class="nav-item" id="nav-cortador" onclick="setView('cortador')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
-      Cortar rip
-    </button>
-    <button class="nav-item" id="nav-auditoria" onclick="setView('auditoria')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v3l2 2"/></svg>
-      Verificar ripeados
-    </button>
-    <button class="nav-item" id="nav-auditoriadigital" onclick="setView('auditoriadigital')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M11 8v3l2 2"/></svg>
-      Verificar digital
-    </button>
-    <button class="nav-item" id="nav-explorador" onclick="setView('explorador')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      Explorador
-    </button>
-    <button class="nav-item" id="nav-comparador" onclick="setView('comparador')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
-      Comparador
-    </button>
-    <button class="nav-item" id="nav-normalizados" onclick="setView('normalizados')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M15 3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1z"/><path d="M9.5 8.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1z"/></svg>
-      Normalizados
-    </button>
-    <div class="nav-section">DJ</div>
-    <button class="nav-item" id="nav-sesiones" onclick="setView('sesiones')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46A2.78 2.78 0 0 0 1.46 6.42 29 29 0 0 0 1 12a29 29 0 0 0 .46 5.58 2.78 2.78 0 0 0 1.95 1.96C5.12 20 12 20 12 20s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.95-1.96A29 29 0 0 0 23 12a29 29 0 0 0-.46-5.58z"/><polygon points="9.75 15.02 15.5 12 9.75 8.98 9.75 15.02"/></svg>
-      Sesiones YouTube
-    </button>
-    <button class="nav-item" id="nav-config" onclick="setView('config')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      Configuración
-    </button>
-    <div class="sidebar-bottom">
-      <div class="stat-row"><span>Vinilos</span><span id="stat-vinilos">—</span></div>
-      <div class="stat-row"><span>Ripeados</span><span id="stat-ripeados">—</span></div>
-      <div class="stat-row"><span>Digital</span><span id="stat-digital">—</span></div>
-      <div class="progress-wrap"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
-      <div class="progress-label" id="progress-label">Cargando...</div>
+    <div class="header-right">
+      <div class="header-stats" id="headerStats" style="display:none">
+        <div class="stat-row"><span>Vinilos</span><span id="stat-vinilos">—</span></div>
+        <div class="stat-row"><span>Ripeados</span><span id="stat-ripeados">—</span></div>
+        <div class="stat-row"><span>Digital</span><span id="stat-digital">—</span></div>
+        <div class="progress-wrap"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+        <span class="progress-label" id="progress-label" style="margin:0"></span>
+      </div>
+      <div class="clock-block">
+        <div class="clock-date">
+          <span class="d1" id="clockD1">—</span>
+          <span class="d2" id="clockD2">—</span>
+        </div>
+        <span class="clock-time" id="clockTime">--:--</span>
+      </div>
+      <button class="config-square" id="btn-config" onclick="setView('config')" title="Configuración">⚙</button>
+    </div>
+  </header>
+
+  <!-- Pantalla de perfil (primer cuadrado: quién trabaja ahora) -->
+  <div class="perfil-screen" id="perfil-screen">
+    <div class="perfil-intro">
+      <h2>¿Quién va a trabajar ahora?</h2>
+      <p>Esto decide qué colección ves — el resto del menú aparece después de elegir.</p>
+    </div>
+    <div class="perfil-grid">
+      <button class="perfil-tile" data-accent="accent" onclick="selectPerfil('petrik')">
+        <div class="tile-stamp">DJ</div>
+        <div class="perfil-tile-name">Dj Petrik</div>
+        <div class="perfil-tile-desc">~1.300 vinilos · Kallax numerado, de Z hacia A</div>
+      </button>
+      <button class="perfil-tile" data-accent="blue" onclick="selectPerfil('paquillo')">
+        <div class="tile-stamp">PQ</div>
+        <div class="perfil-tile-name">Dj Paquillo</div>
+        <div class="perfil-tile-desc">~50 vinilos · estantería propia sin numerar, de menor a mayor referencia</div>
+      </button>
+      <button class="perfil-tile" data-accent="amber" onclick="selectPerfil('juntos')">
+        <div class="tile-stamp">DJ+PQ</div>
+        <div class="perfil-tile-name">Los Dos Juntos</div>
+        <div class="perfil-tile-desc">Toda la colección combinada</div>
+      </button>
     </div>
   </div>
 
-  <!-- Main -->
-  <div class="main" id="main-content">
-    <div class="state-center"><div class="spinner"></div><p>Conectando con Google Sheets...</p></div>
+  <!-- App principal (aparece tras elegir perfil) -->
+  <div class="app-main" id="app-main" style="display:none">
+    <div class="vb-tabs-l1" id="tabs-l1"></div>
+    <div class="vb-tabs-l2" id="tabs-l2"></div>
+    <div class="main" id="main-content">
+      <div class="state-center"><div class="spinner"></div><p>Conectando con Google Sheets...</p></div>
+    </div>
   </div>
 </div>
 
@@ -375,10 +422,16 @@ const COL = {
   formato_rip: 29,
   limpio: 30,
   fecha_limpieza: 31,
-  limpieza_profunda: 32
+  limpieza_profunda: 32,
+  propietario: 33
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
+// Perfil activo (quién está trabajando: Petrik / Paquillo / Juntos) y sección
+// activa (Colección / Herramientas / Redes Sociales), definen la navegación de
+// dos niveles en forma de "cuadrados pestaña" que sustituye a la barra lateral.
+let perfil = localStorage.getItem('vinylbase_perfil') || null;
+let seccion = localStorage.getItem('vinylbase_seccion') || 'coleccion';
 let allData = [];
 let view = 'vinilos';
 let selectedRow = null;
@@ -2244,15 +2297,15 @@ function renderResetRipeadosSection() {
   if (localStorage.getItem(RESET_RIPEADOS_USADO_KEY)) return '';
   const n = allData.filter(isRowRipped).length;
   return `
-      <div class="config-section" style="border:2px solid #c0392b">
-        <h3 style="color:#c0392b">⚠ Zona peligrosa</h3>
+      <div class="config-section" style="border:2px solid var(--red)">
+        <h3 style="color:var(--red)">⚠ Zona peligrosa</h3>
         <p style="font-size:12px;color:var(--text2);margin-bottom:8px">
           Pone "ripeado" a No en los ${n} discos que ahora mismo están marcados como ripeados, para
           volver a empezar de cero (por ejemplo, si has tenido que volver a ripearlo todo por un
           problema de limpieza). No borra ningún archivo tuyo, solo cambia el estado en el Sheet.
           Este botón desaparece para siempre en cuanto lo uses una vez — no hay una segunda vez.
         </p>
-        <button class="btn" style="background:#c0392b;color:white;border-color:#c0392b" ${n === 0 ? 'disabled' : ''} onclick="resetearTodosLosRipeados()">
+        <button class="btn" style="background:var(--red);color:white;border-color:var(--red)" ${n === 0 ? 'disabled' : ''} onclick="resetearTodosLosRipeados()">
           🗑 Resetear los ${n} ripeados (una sola vez)
         </button>
       </div>`;
@@ -2683,7 +2736,7 @@ function renderExplorador() {
             <span style="font-size:11px;color:var(--text3);margin-right:8px;white-space:nowrap">${fmtBytesExplorador(e.size)}</span>
             ${esAudioExplorador(e.name) ? `<button class="btn" style="font-size:11px;padding:3px 8px" onclick="reproducirArchivoExplorerPorIndice(${i})">▶</button>` : ''}
           </div>`).join('')}
-          ${explorerError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${explorerError}</p>` : ''}
+          ${explorerError ? `<p style="font-size:12px;color:var(--red);padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${explorerError}</p>` : ''}
           ${!explorerError && explorerEntries && explorerEntries.carpetas.length === 0 && explorerEntries.archivos.length === 0 ? '<p style="font-size:12px;color:var(--text3);padding:10px">Carpeta vacía (0 subcarpetas, 0 archivos — leída sin errores)</p>' : ''}
         </div>
         `}
@@ -3062,7 +3115,7 @@ function renderComparador() {
       ${cmpScanning && !cmpKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Escaneando... A: ${cmpScanCount.a} archivo(s) · B: ${cmpScanCount.b} archivo(s)</p>` : ''}
       ${cmpKeyPhase ? `<p style="font-size:12px;color:var(--text3)">${cmpBasis === 'tags' ? 'Leyendo etiquetas' : cmpBasis === 'hash' ? 'Calculando huellas' : 'Comparando'}... ${cmpKeyDone}/${cmpKeyTotal}</p>` : ''}
       ${cmpBusy ? `<p style="font-size:12px;color:var(--accent)">${cmpBusyMsg}</p>` : ''}
-      ${cmpError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${cmpError}</p>` : ''}
+      ${cmpError ? `<p style="font-size:12px;color:var(--red);padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${cmpError}</p>` : ''}
 
       ${cmpResults ? `
         <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
@@ -3503,10 +3556,10 @@ function renderNormalizados() {
 
       ${normScanning && !normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Escaneando carpetas...</p>` : ''}
       ${normKeyPhase ? `<p style="font-size:12px;color:var(--text3)">Leyendo etiquetas... ${normKeyDone}/${normKeyTotal}</p>` : ''}
-      ${normError ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${normError}</p>` : ''}
+      ${normError ? `<p style="font-size:12px;color:var(--red);padding:10px;background:rgba(255,0,0,.08);border-radius:6px">⚠ Error real: ${normError}</p>` : ''}
 
       ${normResults ? `
-        ${normResults.noLeidosRoot.length ? `<p style="font-size:12px;color:#e55;padding:10px;background:rgba(255,0,0,.08);border-radius:6px;margin-bottom:10px">⚠ ${normResults.noLeidosRoot.length} archivo(s) de tu Carpeta raíz no se pudieron leer, así que puede que algún álbum no se haya detectado bien:<br>${normResults.noLeidosRoot.map(e => `${e.relPath} — ${e.motivo}`).join('<br>')}</p>` : ''}
+        ${normResults.noLeidosRoot.length ? `<p style="font-size:12px;color:var(--red);padding:10px;background:rgba(255,0,0,.08);border-radius:6px;margin-bottom:10px">⚠ ${normResults.noLeidosRoot.length} archivo(s) de tu Carpeta raíz no se pudieron leer, así que puede que algún álbum no se haya detectado bien:<br>${normResults.noLeidosRoot.map(e => `${e.relPath} — ${e.motivo}`).join('<br>')}</p>` : ''}
         <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
           Encontrados: <b>${normResults.enRoot.length}</b> en la Carpeta raíz · <b>${normResults.normalizados.length}</b> en normalizados
           ${normResults.revisar.length ? ` · <b style="color:var(--accent)">${normResults.revisar.length} a revisar</b>` : ''}
@@ -3611,7 +3664,7 @@ function renderNormalizados() {
             ${normCacheCarpetas ? [...normCacheCarpetas.entries()].sort((a, b) => a[0].localeCompare(b[0], 'es')).map(([nombreCarpeta, grupo]) => `
               <div class="track-row">
                 <span class="track-title" style="flex:1;font-size:11px;font-family:monospace">${nombreCarpeta}</span>
-                <span style="font-size:11px;color:${grupo.catalogNorm ? 'var(--text3)' : '#e55'}">${grupo.catalogNorm ? 'catálogo detectado: "' + grupo.catalogNorm + '"' : '⚠ sin "(...)" al principio del nombre'}</span>
+                <span style="font-size:11px;color:${grupo.catalogNorm ? 'var(--text3)' : 'var(--red)'}">${grupo.catalogNorm ? 'catálogo detectado: "' + grupo.catalogNorm + '"' : '⚠ sin "(...)" al principio del nombre'}</span>
               </div>`).join('') : ''}
           </div>
         </details>
@@ -3779,7 +3832,7 @@ function renderAuditoriaDigitalResultados(r) {
           <button class="btn" style="font-size:11px" onclick="irAFichaDesdeAuditoria(${e.idx})" title="Abre el Google Sheet real en esa fila, en una pestaña nueva">📄 Ver en Sheet</button>
           <button class="btn" style="font-size:11px" onclick="irADiscogsDesdeAuditoria(${e.idx})" title="Abre la ficha del release en Discogs">🔗 Ver en Discogs</button>
           <button class="btn" style="font-size:11px" onclick="marcarVerificarDesdeAuditoriaDigital(${e.idx})">? Marcar "Verificar"</button>
-          <button class="btn" style="font-size:11px;color:#c0392b" onclick="borrarDeAuditoriaDigital(${e.idx})" title="Borra esta línea del Sheet — solo si sabes seguro que ya no la tienes">🗑 Borrar del Sheet</button>
+          <button class="btn" style="font-size:11px;color:var(--red)" onclick="borrarDeAuditoriaDigital(${e.idx})" title="Borra esta línea del Sheet — solo si sabes seguro que ya no la tienes">🗑 Borrar del Sheet</button>
         </div>`).join('')}
       </div>
     </div>`}
@@ -4104,12 +4157,22 @@ function isDigital(row) {
   return fuente === 'engine dj' || filename !== '' || destDigital === 'confirmado';
 }
 
+// Un disco es "de Paquillo" solo si está marcado explícitamente como tal en
+// la columna Propietario. Si está vacía (caso de casi todo el catálogo actual),
+// se considera de Petrik — así no hace falta rellenar 1300 filas a mano.
+function ownerMatchesPerfil(row) {
+  if (perfil === 'juntos') return true;
+  const owner = (g(row, COL.propietario) || '').toLowerCase();
+  if (perfil === 'paquillo') return owner === 'paquillo';
+  return owner !== 'paquillo';
+}
+
 function getVinyls() {
-  return allData.filter(r => isVinyl(r));
+  return allData.filter(r => isVinyl(r) && ownerMatchesPerfil(r));
 }
 
 function getDigital() {
-  return allData.filter(r => isDigital(r));
+  return allData.filter(r => isDigital(r) && ownerMatchesPerfil(r));
 }
 
 function filtered() {
@@ -4170,9 +4233,19 @@ function setView(v) {
   filterDigital = 'all';
   searchQ = '';
   selectedRow = null;
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  document.getElementById('nav-' + v)?.classList.add('active');
+  updateActiveTabs();
   renderView();
+}
+
+function updateActiveTabs() {
+  document.querySelectorAll('.vb-tab-l2').forEach(el => el.classList.remove('active'));
+  const s = SECTIONS[seccion];
+  if (s) {
+    const idx = s.views.findIndex(x => x.id === view);
+    const btns = document.querySelectorAll('#tabs-l2 .vb-tab-l2');
+    if (idx >= 0 && btns[idx]) btns[idx].classList.add('active');
+  }
+  document.getElementById('btn-config')?.classList.toggle('active', view === 'config');
 }
 
 function renderView() {
@@ -4211,6 +4284,7 @@ function renderView() {
   document.getElementById('main-content').innerHTML = `
     <div class="topbar">
       <span class="page-title">${isV ? 'Vinilos' : 'Digital'}</span>
+      <span style="font-size:11px;color:var(--text3);font-family:var(--font-mono)">${rows.length.toLocaleString()} registros</span>
       <div class="search-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input id="search-input" placeholder="Artista, título, sello, catálogo..." value="${searchQ}" oninput="onSearch(this.value)">
@@ -4220,24 +4294,6 @@ function renderView() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.8"/></svg>
         Actualizar
       </button>
-      ${isV ? `<button class="btn btn-accent" onclick="openModal()">+ Añadir vinilo</button>` : ''}
-    </div>
-    <div class="filters">
-      ${isV ? `
-        <span class="chip ${filterStatus==='all'?'on':''}" onclick="filterStatus='all';renderView()">Todos</span>
-        <span class="chip ${filterStatus==='ripped'?'on':''}" onclick="filterStatus='ripped';renderView()">Ripeados</span>
-        <span class="chip ${filterStatus==='pending'?'on':''}" onclick="filterStatus='pending';renderView()">Pendientes</span>
-        <span class="chip ${filterStatus==='you'?'on':''}" onclick="filterStatus='you';renderView()">Tú</span>
-        <span class="chip ${filterStatus==='paquillo'?'on':''}" onclick="filterStatus='paquillo';renderView()">Paquillo</span>
-        <div class="filter-sep"></div>
-        <span class="chip ${filterDigital==='verificar'?'on':''}" onclick="filterDigital=filterDigital==='verificar'?'all':'verificar';renderView()">⚠ Por verificar digital</span>
-        <span class="chip ${filterDigital==='confirmado'?'on':''}" onclick="filterDigital=filterDigital==='confirmado'?'all':'confirmado';renderView()">✓ Digital confirmado</span>
-        <span class="chip ${filterDigital==='no'?'on':''}" onclick="filterDigital=filterDigital==='no'?'all':'no';renderView()">✕ Sin digital</span>
-      ` : `
-        <span class="chip ${filterStatus==='all'?'on':''}" onclick="filterStatus='all';renderView()">Todos</span>
-      `}
-      <div class="filter-sep"></div>
-      <span style="font-size:11px;color:var(--text3)">${rows.length.toLocaleString()} registros</span>
     </div>
     <div style="display:flex;flex:1;min-height:0;flex-direction:row-reverse">
       <div class="table-wrap" style="flex:1">
@@ -4464,7 +4520,7 @@ function renderDetail(row) {
       <button class="btn ${g(row,COL.limpio)==='Sí'?'':'btn-accent'}" style="width:100%;justify-content:center;margin-top:6px" onclick="toggleLimpio(${allData.indexOf(row)})">
         ${g(row,COL.limpio)==='Sí' ? '✕ Marcar sin limpiar' : '🧼 Marcar como limpio'}
       </button>
-      <button class="btn ${g(row,COL.limpieza_profunda)==='Sí'?'':''}" style="width:100%;justify-content:center;margin-top:6px;${g(row,COL.limpieza_profunda)==='Sí'?'color:#c0392b;border-color:#c0392b':''}" onclick="toggleLimpiezaProfunda(${allData.indexOf(row)})" title="Ya pasó por el ultrasonidos pero al escucharlo aún tiene ruidos/chasquidos — necesita otra pasada más a fondo">
+      <button class="btn ${g(row,COL.limpieza_profunda)==='Sí'?'':''}" style="width:100%;justify-content:center;margin-top:6px;${g(row,COL.limpieza_profunda)==='Sí'?'color:var(--red);border-color:var(--red)':''}" onclick="toggleLimpiezaProfunda(${allData.indexOf(row)})" title="Ya pasó por el ultrasonidos pero al escucharlo aún tiene ruidos/chasquidos — necesita otra pasada más a fondo">
         ${g(row,COL.limpieza_profunda)==='Sí' ? '✕ Ya no necesita limpieza profunda' : '⚠ Marcar: necesita limpieza profunda'}
       </button>
 
@@ -4507,7 +4563,7 @@ function renderDetail(row) {
         <div class="dest-opt ${dEst==='Verificar'?'on-verificar':''}" onclick="setDigitalEstado(${allData.indexOf(row)},'Verificar')">? Verificar</div>
         <div class="dest-opt ${dEst==='No'?'on-no':''}" onclick="setDigitalEstado(${allData.indexOf(row)},'No')">✕ No tengo</div>
       </div>
-      ${isVinyl(row) ? `<button class="btn" style="font-size:11px;color:#c0392b;margin-top:6px" onclick="reclasificarComoDigital(${allData.indexOf(row)})" title="Para discos que en realidad nunca fueron vinilo — se metieron en Discogs como si lo fueran hace tiempo">🔁 Esto no era vinilo de verdad — reclasificar a digital</button>` : ''}
+      ${isVinyl(row) ? `<button class="btn" style="font-size:11px;color:var(--red);margin-top:6px" onclick="reclasificarComoDigital(${allData.indexOf(row)})" title="Para discos que en realidad nunca fueron vinilo — se metieron en Discogs como si lo fueran hace tiempo">🔁 Esto no era vinilo de verdad — reclasificar a digital</button>` : ''}
 
       <div class="d-section">Ubicación Kallax</div>
       <button class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:8px" onclick="colocarKallaxAutomatico(${allData.indexOf(row)})" title="Calcula el hueco que le toca por orden de catálogo, y qué otros discos hay que mover para hacerle sitio">
@@ -4542,7 +4598,7 @@ function renderDetail(row) {
       <button class="btn" style="width:100%;justify-content:center;margin-bottom:6px" onclick="quitarDiscoSoloDeApp(${allData.indexOf(row)})" title="Lo quita de lo que ves aquí, pero NO toca el Google Sheet — reaparecerá si recargas">
         🗑 Quitar solo de esta app (no toca el Sheet)
       </button>
-      <button class="btn" style="width:100%;justify-content:center;color:#c0392b;border-color:#c0392b" onclick="borrarDiscoDesdeFicha(${allData.indexOf(row)})">
+      <button class="btn" style="width:100%;justify-content:center;color:var(--red);border-color:var(--red)" onclick="borrarDiscoDesdeFicha(${allData.indexOf(row)})">
         🗑 Borrar también del Sheet
       </button>
     </div>
@@ -4796,8 +4852,8 @@ function goToVinylRecord(releaseId) {
   const idx = allData.findIndex(r => g(r, COL.release_id) === releaseId);
   if (idx === -1) return;
   view = 'vinilos';
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  document.getElementById('nav-vinilos')?.classList.add('active');
+  if (seccion !== 'coleccion') setSeccion('coleccion', true);
+  updateActiveTabs();
   selectRow(idx);
 }
 
@@ -5057,7 +5113,7 @@ function renderCortadorWorkPanel() {
     }
 
     const tracksHtml = tracks.length === 0
-      ? `<div style="font-size:11px;color:${(!entry.manual && coverFetchErrors[cleanId]) ? '#e55' : 'var(--text3)'}">${entry.manual ? '' : (coverFetchErrors[cleanId] ? `⚠ Error trayendo datos de Discogs: ${coverFetchErrors[cleanId]}` : 'Cargando canciones de Discogs...')}</div>`
+      ? `<div style="font-size:11px;color:${(!entry.manual && coverFetchErrors[cleanId]) ? 'var(--red)' : 'var(--text3)'}">${entry.manual ? '' : (coverFetchErrors[cleanId] ? `⚠ Error trayendo datos de Discogs: ${coverFetchErrors[cleanId]}` : 'Cargando canciones de Discogs...')}</div>`
       : `<div class="tracklist">
           ${tracks.map((t, ti) => `
             <div class="track-row cortador-drop-target" style="flex-direction:column;align-items:flex-start;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;margin-bottom:4px;cursor:default"
@@ -5158,7 +5214,7 @@ function renderCortadorAssocEditor() {
       ${renderValidatedTracksHtml()}
 
       ${missingExpected.length ? `
-      <div style="margin-bottom:12px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--warn,#e0a030)">
+      <div style="margin-bottom:12px;padding:10px;background:var(--bg2);border-radius:6px;font-size:12px;color:var(--warn,var(--amber))">
         ⚠ Sin ningún trozo asignado todavía: ${missingExpected.map(i => `"${expected[i].title}"`).join(', ')}
       </div>` : ''}
 
@@ -5177,7 +5233,7 @@ function renderCortadorAssocEditor() {
               let color = 'var(--text3)';
               if (track && track.durationSec != null) {
                 const diffPct = Math.abs(sumSec - track.durationSec) / track.durationSec;
-                color = diffPct > 0.1 ? '#e05252' : '#4caf6d';
+                color = diffPct > 0.1 ? 'var(--red)' : 'var(--green)';
               }
               sumBadge = ` <span style="color:${color};font-weight:600;white-space:nowrap" title="Suma de los ${groupIdx.length} trozos fusionados en este tema${track && track.durationSec != null ? ' — Discogs dice ' + fmtDuration(track.durationSec) : ''}">Σ ${fmtDuration(sumSec)}</span>`;
             }
@@ -6054,7 +6110,7 @@ function renderKallax(selectedSlot, onSelect) {
           const lleno = count >= kallaxConfig.porHueco;
           return `<div class="kc ${isSel ? 'on' : isOcc ? 'occupied' : ''}" onclick="${onSelect}(${slot})" title="Hueco ${slot} — ${count}/${kallaxConfig.porHueco} discos">
             <div>${slot}</div>
-            <div style="font-size:8px;font-weight:500;${lleno ? 'color:#e05252;font-weight:700' : 'opacity:.7'}">${count}/${kallaxConfig.porHueco}</div>
+            <div style="font-size:8px;font-weight:500;${lleno ? 'color:var(--red);font-weight:700' : 'opacity:.7'}">${count}/${kallaxConfig.porHueco}</div>
           </div>`;
         }).join('')).join('')}
       </div>
@@ -6095,7 +6151,108 @@ function onSearch(val) {
   }, 200);
 }
 
+// ─── NAVEGACIÓN: perfil + secciones (cuadrados pestaña) ────────────────────────
+const SECTIONS = {
+  coleccion: { label: 'Colección', views: [
+    { id: 'vinilos', label: 'Vinilos' },
+    { id: 'digital', label: 'Digitales' },
+    { id: 'temasjuntos', label: 'Todos Juntos' }
+  ]},
+  herramientas: { label: 'Herramientas', views: [
+    { id: 'nuevovinilo', label: '+ Vinilo nuevo', action: 'openModal' },
+    { id: 'buscador', label: '¿Tengo este tema?' },
+    { id: 'cortador', label: 'Edición de audio' },
+    { id: 'auditoria', label: 'Verificar ripeados' },
+    { id: 'auditoriadigital', label: 'Verificar digitales' },
+    { id: 'explorador', label: 'Explorador' },
+    { id: 'comparador', label: 'Comparador' },
+    { id: 'normalizados', label: 'Normalizado' }
+  ]},
+  redes: { label: 'Redes Sociales', construccion: true, views: [
+    { id: 'sesiones', label: 'Sesiones YouTube' }
+  ]}
+};
+const PERFIL_NOMBRES = { petrik: 'Dj Petrik', paquillo: 'Dj Paquillo', juntos: 'Los Dos Juntos' };
+
+function selectPerfil(p) {
+  perfil = p;
+  localStorage.setItem('vinylbase_perfil', p);
+  mostrarAppMain();
+  renderView();
+  renderStats();
+}
+
+function cambiarPerfil() {
+  document.getElementById('app-main').style.display = 'none';
+  document.getElementById('headerStats').style.display = 'none';
+  document.getElementById('perfil-screen').style.display = 'flex';
+  document.getElementById('headerEyebrow').textContent = 'VinylBase';
+}
+
+function mostrarAppMain() {
+  document.getElementById('perfil-screen').style.display = 'none';
+  document.getElementById('app-main').style.display = 'flex';
+  document.getElementById('headerStats').style.display = 'flex';
+  document.getElementById('headerEyebrow').textContent = 'VinylBase · ' + (PERFIL_NOMBRES[perfil] || '');
+  renderTabsL1();
+  setSeccion(seccion || 'coleccion', true);
+}
+
+function renderTabsL1() {
+  const el = document.getElementById('tabs-l1');
+  const center = Object.entries(SECTIONS).map(([id, s]) => `
+    <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
+      <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
+    </button>
+  `).join('');
+  el.innerHTML = `
+    <div class="vb-tabs-l1-side"></div>
+    <div class="vb-tabs-l1-center">${center}</div>
+    <div class="vb-tabs-l1-side vb-tabs-l1-side-right">
+      <button class="vb-tab-l1 vb-tab-l1-perfil" onclick="cambiarPerfil()" title="Cambiar quién trabaja ahora">↺ ${PERFIL_NOMBRES[perfil] || 'Perfil'}</button>
+    </div>
+  `;
+}
+
+function renderTabsL2() {
+  const el = document.getElementById('tabs-l2');
+  const s = SECTIONS[seccion];
+  if (!s) { el.innerHTML = ''; return; }
+  el.innerHTML = s.views.map(v => {
+    if (v.action) return `<button class="vb-tab-l2 vb-tab-l2-action" onclick="${v.action}()">${v.label}</button>`;
+    return `<button class="vb-tab-l2 ${view === v.id ? 'active' : ''}" onclick="setView('${v.id}')">${v.label}</button>`;
+  }).join('');
+}
+
+function setSeccion(s, skipViewJump) {
+  seccion = s;
+  localStorage.setItem('vinylbase_seccion', s);
+  renderTabsL1();
+  renderTabsL2();
+  const belongs = SECTIONS[s].views.some(v => v.id === view);
+  if (!belongs && !skipViewJump) { setView(SECTIONS[s].views[0].id); return; }
+  if (!belongs && skipViewJump) setView(SECTIONS[s].views[0].id);
+}
+
+// ─── Reloj del header (día + hora) ──────────────────────────────────────────
+function tickReloj() {
+  const now = new Date();
+  const d1 = document.getElementById('clockD1');
+  const d2 = document.getElementById('clockD2');
+  const ct = document.getElementById('clockTime');
+  if (d1) d1.textContent = now.toLocaleDateString('es-ES', { weekday: 'long', day: '2-digit', month: 'short' });
+  if (d2) d2.textContent = now.getFullYear();
+  if (ct) ct.textContent = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+}
+tickReloj();
+setInterval(tickReloj, 1000 * 15);
+
 // ─── START ────────────────────────────────────────────────────────────────────
+if (perfil) {
+  mostrarAppMain();
+} else {
+  document.getElementById('perfil-screen').style.display = 'flex';
+}
 init();
 </script>
 </body>
