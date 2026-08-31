@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.5 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.6 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -313,7 +313,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.5</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.6</span></h1>
       </div>
     </div>
     <div class="header-right">
@@ -1807,22 +1807,20 @@ async function analyzeCortadorRaw() {
     silenceRegionsInfo.forEach((r, i) => cortadorLogLine(`   ${i+1}. ${fmtDuration(r.startSec)} a ${fmtDuration(r.endSec)} — nivel medido: ${r.avgDb === -Infinity ? '-∞' : r.avgDb.toFixed(1)} dB`));
   }
 
-  // Si conocemos duraciones reales de Discogs, ensanchar el rango min/max para que
-  // no fusione ni rescate temas que ya sabemos que son legítimamente cortos o largos.
+  // Si conocemos duraciones reales de Discogs, bajar el mínimo para no fusionar temas que
+  // ya sabemos que son legítimamente cortos. El MÁXIMO no se toca aquí nunca: es un techo
+  // duro que pones tú a mano — si Discogs dice que hay un tema más largo que ese máximo,
+  // se entiende que esa duración de Discogs está mal (o es en realidad dos temas seguidos)
+  // y se fuerza igual la partición más abajo, en vez de creerle y dejar pasar el trozo largo.
   const expectedTracksPre = getCortadorExpectedTracks();
   const knownDurations = expectedTracksPre.map(t => t.durationSec).filter(d => d != null);
   let effectiveMinSec = minTrackMin * 60;
   let effectiveMaxSec = maxTrackMin * 60;
   if (knownDurations.length) {
     const minExpected = Math.min(...knownDurations) * 0.85; // un poco de margen
-    const maxExpected = Math.max(...knownDurations) * 1.15;
     if (minExpected < effectiveMinSec) {
       cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.min(...knownDurations))} — bajando el mínimo para no fusionarlos.`);
       effectiveMinSec = minExpected;
-    }
-    if (maxExpected > effectiveMaxSec) {
-      cortadorLogLine(`Discogs dice que hay temas de hasta ${fmtDuration(Math.max(...knownDurations))} — subiendo el máximo para no partirlos de más.`);
-      effectiveMaxSec = maxExpected;
     }
   }
 
@@ -1929,6 +1927,21 @@ async function startCortadorAssociation() {
 function setCortadorAssignment(idx, value) {
   if (!cortadorAssocData) return;
   cortadorAssocData.assignments[idx] = parseInt(value, 10);
+  renderCortador();
+}
+
+// Parte un trozo en dos a partir de su mitad, e inserta el segundo pedazo como un nuevo
+// corte marcado "Descartar" (silencio) — para cuando dentro de un mismo trozo detectado
+// hay en realidad un hueco de silencio que no se detectó solo. Los dos tiempos quedan
+// editables a mano para ajustar el punto exacto de corte.
+function insertCortadorSilence(idx) {
+  const d = cortadorAssocData;
+  if (!d) return;
+  const seg = d.segments[idx];
+  const mid = (seg.startSec + seg.endSec) / 2;
+  d.segments[idx] = { startSec: seg.startSec, endSec: mid };
+  d.segments.splice(idx + 1, 0, { startSec: mid, endSec: seg.endSec });
+  d.assignments.splice(idx + 1, 0, -1);
   renderCortador();
 }
 
@@ -4254,6 +4267,7 @@ function setView(v) {
   filterDigital = 'all';
   searchQ = '';
   selectedRow = null;
+  renderTabsL1();
   renderView();
 }
 
@@ -4322,7 +4336,7 @@ function renderView() {
             <th style="width:22%" onclick="toggleSort('artist')">Artista</th>
             <th style="width:28%" onclick="toggleSort('title')">Título</th>
             <th style="width:14%" onclick="toggleSort('label')">Sello</th>
-            <th style="width:50px" onclick="toggleSort('year')">Año</th>
+            <th style="width:62px" onclick="toggleSort('year')">Año</th>
             <th style="width:90px">Estado</th>
             <th style="width:70px">Quién</th>
             <th style="width:80px">Digital</th>
@@ -4332,7 +4346,7 @@ function renderView() {
             <th style="width:22%" onclick="toggleSort('artist')">Artista</th>
             <th style="width:28%" onclick="toggleSort('title')">Título</th>
             <th style="width:14%" onclick="toggleSort('label')">Sello</th>
-            <th style="width:50px" onclick="toggleSort('year')">Año</th>
+            <th style="width:62px" onclick="toggleSort('year')">Año</th>
             <th style="width:60px">BPM</th>
             <th style="width:80px">Género</th>
             <th style="width:60px">Formato</th>
@@ -5159,6 +5173,7 @@ function renderCortadorWorkPanel() {
         <div style="font-size:9px;color:var(--text3);margin-bottom:1px">DISCO ${idx + 1}</div>
         ${titleHtml}
         <div style="margin-top:8px">${tracksHtml}</div>
+        ${!entry.manual ? `<button class="btn" style="width:100%;justify-content:center;margin-top:8px;font-size:11px" onclick="createFolderForRow(${allData.indexOf(entry.row)})">📁 Crear carpeta de ripeo</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -5279,6 +5294,7 @@ function renderCortadorAssocEditor() {
               <option value="-1" ${assignments[i] === -1 ? 'selected' : ''}>${dur > 15 ? '— ⚠ Sin encaje (revisar — ¿otro disco?) —' : '— Descartar (ruido) —'}</option>
               ${expected.map((t, ei) => `<option value="${ei}" ${assignments[i] === ei ? 'selected' : ''}>${t.position ? t.position + ' — ' : ''}${t.title}${t.durationSec != null ? ' (' + fmtDuration(t.durationSec) + ')' : ''}</option>`).join('')}
             </select>
+            <button class="btn" style="font-size:12px;padding:4px 9px" onclick="insertCortadorSilence(${i})" title="Partir este trozo en dos a partir de la mitad, metiendo un corte de silencio — luego ajusta los tiempos a mano">➗ Silencio</button>
             <button class="btn" style="font-size:12px;padding:4px 9px;${assignments[i] != null && assignments[i] >= 0 ? '' : 'opacity:.4;cursor:default'}" ${assignments[i] != null && assignments[i] >= 0 ? '' : 'disabled'} onclick="validateCortadorTrack(${i})" title="Dar este tema por bueno — no se tocará en un futuro reanálisis">✓</button>
           </div>`;
         }).join('')}
@@ -6188,6 +6204,7 @@ const SECTIONS = {
   ]},
   herramientas: { label: 'Herramientas', stamp: 'HR', views: [
     { id: 'nuevovinilo', label: 'Añadir vinilo', action: 'openModal', stamp: '+' },
+    { id: 'caratulas', label: 'Poner Carátulas', action: 'lanzarPonerCaratulas', stamp: 'PC' },
     { id: 'buscador', label: '¿Tengo este tema?', stamp: '?' },
     { id: 'cortador', label: 'Edición de audio', stamp: 'EA' },
     { id: 'auditoria', label: 'Verificar ripeados', stamp: 'VR' },
@@ -6209,6 +6226,15 @@ function selectPerfil(p) {
   renderStats();
 }
 
+// Un navegador no puede lanzar un .exe directamente por seguridad. Esto intenta abrir un
+// protocolo personalizado (poner-caratulas://) — solo hace algo si ya lo tienes registrado
+// en Windows apuntando a tu Poner Carátulas.exe (un .reg de una sola vez). Si no está
+// registrado, el navegador simplemente ignora el enlace y no pasa nada.
+function lanzarPonerCaratulas() {
+  window.location.href = 'poner-caratulas://abrir';
+  showToast('Si no se ha abierto nada: hace falta registrar el protocolo poner-caratulas:// en Windows apuntando a tu .exe (pídeselo a Claude una vez y te prepara el .reg)');
+}
+
 function cambiarPerfil() {
   document.getElementById('app-main').style.display = 'none';
   document.getElementById('headerStats').style.display = 'none';
@@ -6227,12 +6253,29 @@ function mostrarAppMain() {
   renderView();
 }
 
+// Reparte n cuadrados en columnas lo más cuadradas/equilibradas posible, evitando una
+// última fila casi vacía (p.ej. 8 → 4×2, nunca 7+1). Busca primero un divisor exacto
+// cerca de la raíz cuadrada; si no lo hay (números primos, etc.) cae en ceil(sqrt(n)).
+function gridCols(n) {
+  if (n <= 1) return 1;
+  const start = Math.ceil(Math.sqrt(n));
+  for (let d = start; d <= start + 2 && d <= n; d++) {
+    if (n % d === 0) return d;
+  }
+  for (let d = start - 1; d >= 2; d--) {
+    if (n % d === 0) return d;
+  }
+  return start;
+}
+
 function renderTopMenu() {
   const accents = ['accent', 'blue', 'amber'];
+  const items = Object.entries(SECTIONS);
+  const cols = gridCols(items.length);
   document.getElementById('main-content').innerHTML = `
     <div class="tool-menu">
-      <div class="tool-menu-grid">
-        ${Object.entries(SECTIONS).map(([id, s], i) => `
+      <div class="tool-menu-grid" style="grid-template-columns:repeat(${cols},1fr)">
+        ${items.map(([id, s], i) => `
           <button class="tool-tile" data-accent="${accents[i % accents.length]}" onclick="setSeccion('${id}')">
             <div class="tile-stamp">${s.stamp}</div>
             <div class="tool-tile-name">${s.label}</div>
@@ -6246,11 +6289,23 @@ function renderTopMenu() {
 
 function renderTabsL1() {
   const el = document.getElementById('tabs-l1');
-  const center = Object.entries(SECTIONS).map(([id, s]) => `
-    <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
-      <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
-    </button>
-  `).join('');
+  let center = '';
+  if (!seccion) {
+    center = '';
+  } else if (!view) {
+    center = Object.entries(SECTIONS).map(([id, s]) => `
+      <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
+        <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
+      </button>
+    `).join('');
+  } else {
+    const s = SECTIONS[seccion];
+    center = s.views.map(v => `
+      <button class="vb-tab-l1 ${view === v.id ? 'active' : ''}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
+        <span class="dot"></span>${v.label}
+      </button>
+    `).join('');
+  }
   el.innerHTML = `
     <div class="vb-tabs-l1-side"></div>
     <div class="vb-tabs-l1-center">${center}</div>
@@ -6263,9 +6318,10 @@ function renderTabsL1() {
 function renderSeccionMenu() {
   const s = SECTIONS[seccion];
   const accents = ['accent', 'blue', 'amber'];
+  const cols = gridCols(s.views.length);
   document.getElementById('main-content').innerHTML = `
     <div class="tool-menu">
-      <div class="tool-menu-grid">
+      <div class="tool-menu-grid" style="grid-template-columns:repeat(${cols},1fr)">
         ${s.views.map((v, i) => `
           <button class="tool-tile" data-accent="${accents[i % accents.length]}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
             <div class="tile-stamp">${v.stamp || '·'}</div>
