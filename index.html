@@ -261,12 +261,13 @@
   .vb-tab-l1.active .dot { background: var(--accent); }
   .vb-tab-l1.construccion { opacity: .65; }
 
-  .vb-tabs-l2 { display: flex; gap: 6px; padding: 12px 24px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-  .vb-tab-l2 { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; transition: all .15s; white-space: nowrap; }
-  .vb-tab-l2:hover { border-color: var(--border2); color: var(--text); }
-  .vb-tab-l2.active { background: var(--accent-bg); color: var(--accent-dark); border-color: var(--accent-border); }
-  .vb-tab-l2-action { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
-  .vb-tab-l2-action:hover { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+  /* ─── Menú de cuadrados (Colección / Herramientas al entrar) ───────────── */
+  .tool-menu { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px; overflow-y: auto; }
+  .tool-menu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; width: 100%; max-width: 880px; }
+  .tool-tile { background: var(--bg2); border: 1.5px solid var(--border); border-radius: 14px; padding: 22px 16px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; cursor: pointer; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+  .tool-tile:hover { transform: translateY(-3px); box-shadow: 0 10px 24px -8px rgba(31,36,33,.18); border-color: var(--accent); }
+  .tool-tile .tile-stamp { color: var(--accent-dark); border-color: var(--accent); }
+  .tool-tile-name { font-family: var(--font-display); font-weight: 700; font-size: 13.5px; line-height: 1.3; }
   .header-stats { display: flex; align-items: center; gap: 16px; margin-left: auto; flex-wrap: wrap; }
   .header-stats .stat-row { margin-bottom: 0; gap: 5px; font-family: var(--font-mono); }
   .header-stats .progress-wrap { width: 70px; margin-top: 0; }
@@ -341,7 +342,6 @@
   <!-- App principal (aparece tras elegir perfil) -->
   <div class="app-main" id="app-main" style="display:none">
     <div class="vb-tabs-l1" id="tabs-l1"></div>
-    <div class="vb-tabs-l2" id="tabs-l2"></div>
     <div class="main" id="main-content">
       <div class="state-center"><div class="spinner"></div><p>Conectando con Google Sheets...</p></div>
     </div>
@@ -4233,22 +4233,16 @@ function setView(v) {
   filterDigital = 'all';
   searchQ = '';
   selectedRow = null;
-  updateActiveTabs();
   renderView();
 }
 
-function updateActiveTabs() {
-  document.querySelectorAll('.vb-tab-l2').forEach(el => el.classList.remove('active'));
-  const s = SECTIONS[seccion];
-  if (s) {
-    const idx = s.views.findIndex(x => x.id === view);
-    const btns = document.querySelectorAll('#tabs-l2 .vb-tab-l2');
-    if (idx >= 0 && btns[idx]) btns[idx].classList.add('active');
-  }
+function updateConfigBtn() {
   document.getElementById('btn-config')?.classList.toggle('active', view === 'config');
 }
 
 function renderView() {
+  updateConfigBtn();
+  if (!view) { renderSeccionMenu(); return; }
   if (view === 'config') { renderConfig(); return; }
   if (view === 'sesiones') { renderSesiones(); return; }
   if (view === 'temasjuntos') { renderTemasJuntos(); return; }
@@ -4851,9 +4845,8 @@ function findVinylForDigitalEntry(e) {
 function goToVinylRecord(releaseId) {
   const idx = allData.findIndex(r => g(r, COL.release_id) === releaseId);
   if (idx === -1) return;
-  view = 'vinilos';
-  if (seccion !== 'coleccion') setSeccion('coleccion', true);
-  updateActiveTabs();
+  if (seccion !== 'coleccion') { seccion = 'coleccion'; localStorage.setItem('vinylbase_seccion', seccion); renderTabsL1(); }
+  setView('vinilos');
   selectRow(idx);
 }
 
@@ -6154,22 +6147,22 @@ function onSearch(val) {
 // ─── NAVEGACIÓN: perfil + secciones (cuadrados pestaña) ────────────────────────
 const SECTIONS = {
   coleccion: { label: 'Colección', views: [
-    { id: 'vinilos', label: 'Vinilos' },
-    { id: 'digital', label: 'Digitales' },
-    { id: 'temasjuntos', label: 'Todos Juntos' }
+    { id: 'vinilos', label: 'Vinilos', stamp: 'VN' },
+    { id: 'digital', label: 'Digitales', stamp: 'DG' },
+    { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' }
   ]},
   herramientas: { label: 'Herramientas', views: [
-    { id: 'nuevovinilo', label: '+ Vinilo nuevo', action: 'openModal' },
-    { id: 'buscador', label: '¿Tengo este tema?' },
-    { id: 'cortador', label: 'Edición de audio' },
-    { id: 'auditoria', label: 'Verificar ripeados' },
-    { id: 'auditoriadigital', label: 'Verificar digitales' },
-    { id: 'explorador', label: 'Explorador' },
-    { id: 'comparador', label: 'Comparador' },
-    { id: 'normalizados', label: 'Normalizado' }
+    { id: 'nuevovinilo', label: '+ Vinilo nuevo', action: 'openModal', stamp: '+' },
+    { id: 'buscador', label: '¿Tengo este tema?', stamp: '?' },
+    { id: 'cortador', label: 'Edición de audio', stamp: 'EA' },
+    { id: 'auditoria', label: 'Verificar ripeados', stamp: 'VR' },
+    { id: 'auditoriadigital', label: 'Verificar digitales', stamp: 'VD' },
+    { id: 'explorador', label: 'Explorador', stamp: 'EX' },
+    { id: 'comparador', label: 'Comparador', stamp: 'CM' },
+    { id: 'normalizados', label: 'Normalizado', stamp: 'NZ' }
   ]},
   redes: { label: 'Redes Sociales', construccion: true, views: [
-    { id: 'sesiones', label: 'Sesiones YouTube' }
+    { id: 'sesiones', label: 'Sesiones YouTube', stamp: 'YT' }
   ]}
 };
 const PERFIL_NOMBRES = { petrik: 'Dj Petrik', paquillo: 'Dj Paquillo', juntos: 'Los Dos Juntos' };
@@ -6178,7 +6171,6 @@ function selectPerfil(p) {
   perfil = p;
   localStorage.setItem('vinylbase_perfil', p);
   mostrarAppMain();
-  renderView();
   renderStats();
 }
 
@@ -6194,8 +6186,7 @@ function mostrarAppMain() {
   document.getElementById('app-main').style.display = 'flex';
   document.getElementById('headerStats').style.display = 'flex';
   document.getElementById('headerEyebrow').textContent = 'VinylBase · ' + (PERFIL_NOMBRES[perfil] || '');
-  renderTabsL1();
-  setSeccion(seccion || 'coleccion', true);
+  setSeccion(seccion || 'coleccion');
 }
 
 function renderTabsL1() {
@@ -6214,24 +6205,28 @@ function renderTabsL1() {
   `;
 }
 
-function renderTabsL2() {
-  const el = document.getElementById('tabs-l2');
+function renderSeccionMenu() {
   const s = SECTIONS[seccion];
-  if (!s) { el.innerHTML = ''; return; }
-  el.innerHTML = s.views.map(v => {
-    if (v.action) return `<button class="vb-tab-l2 vb-tab-l2-action" onclick="${v.action}()">${v.label}</button>`;
-    return `<button class="vb-tab-l2 ${view === v.id ? 'active' : ''}" onclick="setView('${v.id}')">${v.label}</button>`;
-  }).join('');
+  document.getElementById('main-content').innerHTML = `
+    <div class="tool-menu">
+      <div class="tool-menu-grid">
+        ${s.views.map(v => `
+          <button class="tool-tile" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
+            <div class="tile-stamp">${v.stamp || '·'}</div>
+            <div class="tool-tile-name">${v.label}</div>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
-function setSeccion(s, skipViewJump) {
+function setSeccion(s) {
   seccion = s;
   localStorage.setItem('vinylbase_seccion', s);
+  view = null;
   renderTabsL1();
-  renderTabsL2();
-  const belongs = SECTIONS[s].views.some(v => v.id === view);
-  if (!belongs && !skipViewJump) { setView(SECTIONS[s].views[0].id); return; }
-  if (!belongs && skipViewJump) setView(SECTIONS[s].views[0].id);
+  renderView();
 }
 
 // ─── Reloj del header (día + hora) ──────────────────────────────────────────
