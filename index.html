@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.4 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.5 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -313,7 +313,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.4</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.5</span></h1>
       </div>
     </div>
     <div class="header-right">
@@ -4263,6 +4263,7 @@ function updateConfigBtn() {
 
 function renderView() {
   updateConfigBtn();
+  if (!seccion) { renderTopMenu(); return; }
   if (!view) { renderSeccionMenu(); return; }
   if (view === 'config') { renderConfig(); return; }
   if (view === 'sesiones') { renderSesiones(); return; }
@@ -4413,6 +4414,18 @@ function renderView() {
   }
 }
 
+// Insignia de ubicación en el detalle: hueco + posición dentro de ese hueco
+// (de menor a mayor referencia de catálogo, igual que se colocan físicamente),
+// sobre el aforo configurado (kallaxConfig.porHueco, p.ej. 100 por hueco).
+function kallaxBadge(row) {
+  const slot = g(row, COL.kallax_slot);
+  if (!slot) return `<div class="d-kallax-badge d-kallax-badge-empty">Sin ubicar en Kallax</div>`;
+  const sameSlot = allData.filter(r => g(r, COL.kallax_slot) === slot)
+    .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
+  const pos = sameSlot.indexOf(row) + 1;
+  return `<div class="d-kallax-badge">📍 Hueco ${slot} · ${pos > 0 ? pos : '?'}/${kallaxConfig.porHueco}</div>`;
+}
+
 function renderDetail(row) {
   const isV = view === 'vinilos';
   const isRipped = g(row, COL.ripeado).toLowerCase() === 'si' || g(row, COL.ripeado).toLowerCase() === 'sí';
@@ -4448,10 +4461,7 @@ function renderDetail(row) {
 
       <div class="d-artist">${g(row, COL.artist)}</div>
       <div class="d-title">${g(row, COL.title)}</div>
-      ${isV ? (g(row, COL.kallax_slot)
-          ? `<div class="d-kallax-badge">📍 Hueco ${g(row, COL.kallax_slot)}</div>`
-          : `<div class="d-kallax-badge d-kallax-badge-empty">Sin ubicar en Kallax</div>`)
-        : ''}
+      ${isV ? kallaxBadge(row) : ''}
 
       <div class="d-field"><span class="d-label">Sello</span><span class="d-val">${g(row, COL.label)}</span></div>
       <div class="d-field"><span class="d-label">Año</span><span class="d-val">${g(row, COL.year)}</span></div>
@@ -6171,12 +6181,12 @@ function onSearch(val) {
 
 // ─── NAVEGACIÓN: perfil + secciones (cuadrados pestaña) ────────────────────────
 const SECTIONS = {
-  coleccion: { label: 'Colección', views: [
+  coleccion: { label: 'Colección', stamp: 'CL', views: [
     { id: 'vinilos', label: 'Vinilos', stamp: 'VN' },
     { id: 'digital', label: 'Digitales', stamp: 'DG' },
     { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' }
   ]},
-  herramientas: { label: 'Herramientas', views: [
+  herramientas: { label: 'Herramientas', stamp: 'HR', views: [
     { id: 'nuevovinilo', label: 'Añadir vinilo', action: 'openModal', stamp: '+' },
     { id: 'buscador', label: '¿Tengo este tema?', stamp: '?' },
     { id: 'cortador', label: 'Edición de audio', stamp: 'EA' },
@@ -6186,7 +6196,7 @@ const SECTIONS = {
     { id: 'comparador', label: 'Comparador', stamp: 'CM' },
     { id: 'normalizados', label: 'Normalizado', stamp: 'NZ' }
   ]},
-  redes: { label: 'Redes Sociales', construccion: true, views: [
+  redes: { label: 'Redes Sociales', stamp: 'RS', construccion: true, views: [
     { id: 'sesiones', label: 'Sesiones YouTube', stamp: 'YT' }
   ]}
 };
@@ -6211,7 +6221,27 @@ function mostrarAppMain() {
   document.getElementById('app-main').style.display = 'flex';
   document.getElementById('headerStats').style.display = 'flex';
   document.getElementById('headerEyebrow').textContent = 'VinylBase · ' + (PERFIL_NOMBRES[perfil] || '');
-  setSeccion(seccion || 'coleccion');
+  seccion = null;
+  view = null;
+  renderTabsL1();
+  renderView();
+}
+
+function renderTopMenu() {
+  const accents = ['accent', 'blue', 'amber'];
+  document.getElementById('main-content').innerHTML = `
+    <div class="tool-menu">
+      <div class="tool-menu-grid">
+        ${Object.entries(SECTIONS).map(([id, s], i) => `
+          <button class="tool-tile" data-accent="${accents[i % accents.length]}" onclick="setSeccion('${id}')">
+            <div class="tile-stamp">${s.stamp}</div>
+            <div class="tool-tile-name">${s.label}</div>
+            ${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function renderTabsL1() {
