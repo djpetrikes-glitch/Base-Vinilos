@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.26 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.27 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.26</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.27</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -4749,11 +4749,14 @@ function renderDetail(row) {
       </div>
       ${isVinyl(row) ? `<button class="btn" style="font-size:11px;color:var(--red);margin-top:6px" onclick="reclasificarComoDigital(${allData.indexOf(row)})" title="Para discos que en realidad nunca fueron vinilo — se metieron en Discogs como si lo fueran hace tiempo">🔁 Esto no era vinilo de verdad — reclasificar a digital</button>` : ''}
 
+      ${isVinyl(row) ? `
       <div class="d-section">Ubicación Kallax</div>
       <button class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:8px" onclick="colocarKallaxAutomatico(${allData.indexOf(row)})" title="Calcula el hueco que le toca por orden de catálogo, y qué otros discos hay que mover para hacerle sitio">
         📐 Colocar automáticamente por catálogo
       </button>
+      ${g(row, COL.kallax_slot) ? `<button class="btn" style="width:100%;justify-content:center;margin-bottom:8px;font-size:11px" onclick="setKallaxSlot(${allData.indexOf(row)}, '')">✕ Quitar de Kallax</button>` : ''}
       ${renderKallax(g(row, COL.kallax_slot), 'setKallaxSlot.bind(null,' + allData.indexOf(row) + ')')}
+      ` : ''}
 
       <div class="d-section">Carátula</div>
       <div class="cover-btns">
@@ -4909,10 +4912,12 @@ function renderConfig() {
       <div class="config-section">
         <h3>Estanterías Kallax</h3>
         <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Cuántos huecos hay activos ahora mismo (los que se usan para colocar automáticamente por catálogo) y cuántos discos caben en cada uno.</p>
-        <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
           <div class="field-g"><label>Huecos activos</label><input type="number" min="1" value="${kallaxConfig.numHuecos}" style="width:80px" onchange="kallaxConfig.numHuecos=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
           <div class="field-g"><label>Discos por hueco</label><input type="number" min="1" value="${kallaxConfig.porHueco}" style="width:80px" onchange="kallaxConfig.porHueco=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
         </div>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:8px;font-size:11px" onclick="limpiarKallaxDeDigitales()" title="Quita el hueco de Kallax a cualquier disco que no sea vinilo físico">🧹 Quitar Kallax de los digitales (por si alguno se coló)</button>
+        <button class="btn" style="width:100%;justify-content:center;font-size:11px" onclick="renombrarHuecosKallax()" title="Aplica de una vez el renombrado 1↔2 · 3↔5 · 6↔9 · 7↔8 · 10↔12 · 13↔15">🔀 Renombrar huecos (corregir la numeración al revés)</button>
       </div>
       <div class="config-section">
         <h3>Fotos de fondo</h3>
@@ -6381,7 +6386,8 @@ function pintarTarjetasKallaxHueco(discos) {
           <div style="margin-top:6px;max-height:120px;overflow-y:auto">
             ${tracklist === undefined ? `<div style="font-size:10px;color:var(--text3)">Cargando canciones...</div>` : (!tracklist || tracklist.length === 0) ? `<div style="font-size:10px;color:var(--text3)">Sin tracklist en Discogs</div>` : tracklist.map(t => `<div style="font-size:10.5px;padding:2px 0;border-bottom:1px dashed var(--border)">${t.position ? t.position + ' — ' : ''}${t.title}</div>`).join('')}
           </div>
-          <select onchange="setKallaxSlot(${idx}, this.value)" style="width:100%;margin-top:8px;font-size:11px;padding:5px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)" title="Mover este disco a otro hueco">
+          <select onchange="setKallaxSlot(${idx}, this.value)" style="width:100%;margin-top:8px;font-size:11px;padding:5px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)" title="Mover este disco a otro hueco, o quitarlo de Kallax">
+            <option value="">— Quitar de Kallax —</option>
             ${opcionesHueco.map(n => `<option value="${n}" ${String(n) === String(g(r, COL.kallax_slot)) ? 'selected' : ''}>Hueco ${n}</option>`).join('')}
           </select>
         </div>
@@ -6436,11 +6442,76 @@ function renderKallax(selectedSlot, onSelect) {
   </div>`;
 }
 
+// Por si algún digital se coló en Kallax antes de que existiera esta comprobación
+// (no debería volver a pasar, pero esto limpia lo que ya se hubiera colado).
+async function limpiarKallaxDeDigitales() {
+  const afectados = allData.filter(r => !isVinyl(r) && g(r, COL.kallax_slot));
+  if (!afectados.length) { showToast('No hay ningún digital con hueco de Kallax puesto'); return; }
+  if (!confirm(`${afectados.length} disco(s) marcados como digital tienen un hueco de Kallax puesto (no puede ser, físicamente). ¿Los quito?`)) return;
+  showToast(`Quitando Kallax de ${afectados.length} discos...`);
+  for (const r of afectados) {
+    r[COL.kallax_slot] = '';
+    try { await postToSheet(r, [{ col: COL.kallax_slot, value: '' }]); } catch(e) {}
+    await new Promise(res => setTimeout(res, 150));
+  }
+  showToast(`✓ Kallax quitado de ${afectados.length} discos`);
+  renderStats();
+  renderView();
+}
+
+// Migración puntual: corrige la numeración de huecos que se colocó al revés.
+// 1↔2 · 3↔5 · 6↔9 · 7↔8 · 10↔12 · 13↔15 — el 4, el 11 y el 14 se quedan igual.
+const KALLAX_RENAME_MAP = { '1':'2','2':'1','3':'5','5':'3','6':'9','9':'6','7':'8','8':'7','10':'12','12':'10','13':'15','15':'13' };
+async function renombrarHuecosKallax() {
+  const cambios = allData
+    .filter(r => KALLAX_RENAME_MAP[String(g(r, COL.kallax_slot))] !== undefined)
+    .map(r => ({ row: r, despues: KALLAX_RENAME_MAP[String(g(r, COL.kallax_slot))] }));
+  if (!cambios.length) { showToast('No hay discos en huecos que cambien de número'); return; }
+  if (!confirm(`Esto va a renombrar el hueco de ${cambios.length} discos:\n\n1↔2 · 3↔5 · 6↔9 · 7↔8 · 10↔12 · 13↔15\n(4, 11 y 14 se quedan igual)\n\n¿Seguro?`)) return;
+
+  showToast(`Renombrando huecos de ${cambios.length} discos...`);
+  cambios.forEach(c => { c.row[COL.kallax_slot] = c.despues; });
+
+  let enviados = 0;
+  for (const c of cambios) {
+    try { await postToSheet(c.row, [{ col: COL.kallax_slot, value: c.despues }]); } catch(e) {}
+    enviados++;
+    if (enviados % 25 === 0) showToast(`Renombrando... ${enviados}/${cambios.length}`);
+    await new Promise(res => setTimeout(res, 120));
+  }
+
+  showToast('Comprobando que se guardó todo...');
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, { method: 'GET' });
+    const json = await res.json();
+    if (json.ok) {
+      const dataRows = json.data.slice(1);
+      let ok = 0;
+      for (const c of cambios) {
+        const rid = g(c.row, COL.release_id);
+        const art = g(c.row, COL.artist), tit = g(c.row, COL.title);
+        const match = dataRows.find(dr => rid
+          ? String(dr[COL.release_id] ?? '').trim() === rid
+          : (String(dr[COL.artist] ?? '').trim() === art && String(dr[COL.title] ?? '').trim() === tit));
+        if (match && String(match[COL.kallax_slot] ?? '').trim() === c.despues) ok++;
+      }
+      showToast(ok === cambios.length
+        ? `✓ Los ${ok} huecos se renombraron correctamente`
+        : `⚠ ${ok}/${cambios.length} confirmados — recarga y revisa los que falten`, ok !== cambios.length);
+    }
+  } catch(e) {
+    showToast('⚠ No se pudo verificar — recarga la página y comprueba a mano', true);
+  }
+  renderStats();
+  renderView();
+}
+
 function setKallaxSlot(idx, slot) {
-  allData[idx][COL.kallax_slot] = String(slot);
+  const val = (slot === '' || slot == null) ? '' : String(slot);
+  allData[idx][COL.kallax_slot] = val;
   selectedRow = allData[idx];
   renderView();
-  showToast('\u2713 Ubicado en hueco ' + slot);
+  showToast(val ? '✓ Ubicado en hueco ' + val : '✓ Quitado de Kallax');
   saveToSheet(idx);
 }
 
