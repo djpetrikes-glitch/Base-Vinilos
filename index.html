@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.23 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.25 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.23</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.25</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -4410,6 +4410,7 @@ function renderView() {
   if (view === 'config') { renderConfig(); return; }
   if (view === 'sesiones') { renderSesiones(); return; }
   if (view === 'temasjuntos') { renderTemasJuntos(); return; }
+  if (view === 'kallax') { renderKallaxBrowser(); return; }
   if (view === 'buscador') { renderBuscador(); return; }
   if (view === 'cortador') { renderCortador(); return; }
   if (view === 'auditoria') { renderAuditoria(); return; }
@@ -6321,6 +6322,54 @@ async function colocarKallaxAutomatico(idx) {
   showToast(`✓ Colocación actualizada — ${moves.length} disco(s) movidos`);
 }
 
+// Hueco actualmente abierto en el explorador de Kallax (null = mostrando la cuadrícula)
+let kallaxHuecoActivo = null;
+
+function renderKallaxBrowser() {
+  if (kallaxHuecoActivo == null) {
+    document.getElementById('main-content').innerHTML = `
+      <div class="content-header"><div style="font-weight:600">🗄️ Kallax</div></div>
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;overflow-y:auto;padding:24px">
+        <div style="max-width:560px;width:100%">
+          <p style="font-size:12px;color:var(--text2);margin-bottom:14px;text-align:center">Pincha un hueco para ver qué discos tienes ahí.</p>
+          ${renderKallax(null, 'verHuecoKallax')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+  const slot = kallaxHuecoActivo;
+  const discos = allData.filter(r => String(g(r, COL.kallax_slot)) === String(slot))
+    .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
+  document.getElementById('main-content').innerHTML = `
+    <div class="content-header" style="display:flex;align-items:center;gap:10px">
+      <button class="btn" style="font-size:11px" onclick="kallaxHuecoActivo=null;renderView()">← Volver a Kallax</button>
+      <div style="font-weight:600">🗄️ Hueco ${slot} — ${discos.length}/${kallaxConfig.porHueco} discos</div>
+    </div>
+    <div style="padding:16px;overflow-y:auto;max-width:760px;margin:0 auto">
+      ${discos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">Este hueco está vacío.</p>` : `
+      <div class="tracklist">
+        ${discos.map(r => `<div class="track-row" style="cursor:pointer" onclick="abrirDiscoDesdeKallax(${allData.indexOf(r)})">
+          <span style="font-family:monospace;font-size:10px;color:var(--text3);width:70px;flex-shrink:0">${g(r,COL.catalog)}</span>
+          <span class="track-title" style="white-space:normal;flex:1">${g(r,COL.artist)} — ${g(r,COL.title)}</span>
+        </div>`).join('')}
+      </div>`}
+    </div>
+  `;
+}
+
+function verHuecoKallax(slot) {
+  kallaxHuecoActivo = slot;
+  renderView();
+}
+
+// Abre la ficha de un disco desde el explorador de Kallax, igual que al pinchar en Vinilos
+function abrirDiscoDesdeKallax(idx) {
+  if (seccion !== 'coleccion') { seccion = 'coleccion'; localStorage.setItem('vinylbase_seccion', seccion); }
+  setView('vinilos');
+  selectRow(idx);
+}
+
 function renderKallax(selectedSlot, onSelect) {
   // Contar cuántos discos hay ya en cada hueco (no solo si está ocupado o no)
   const counts = {};
@@ -6388,7 +6437,8 @@ const SECTIONS = {
   coleccion: { label: 'Colección', stamp: 'CL', views: [
     { id: 'vinilos', label: 'Vinilos', stamp: 'VN' },
     { id: 'digital', label: 'Digitales', stamp: 'DG' },
-    { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' }
+    { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' },
+    { id: 'kallax', label: 'Kallax', stamp: 'KX' }
   ]},
   herramientas: { label: 'Herramientas', stamp: 'HR', views: [
     { id: 'nuevovinilo', label: 'Añadir vinilo', action: 'openModal', stamp: '+' },
@@ -6497,11 +6547,33 @@ function renderTopMenu() {
 
 function renderTabsL1() {
   const el = document.getElementById('tabs-l1');
-  const center = Object.entries(SECTIONS).map(([id, s]) => `
-    <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
-      <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
-    </button>
-  `).join('');
+  let center = '';
+  if (!seccion) {
+    // Nivel 1 (el menú grande de Colección/Herramientas/Redes): a esto se llegó
+    // eligiendo perfil, así que arriba van los perfiles.
+    center = Object.entries(PERFIL_NOMBRES).map(([id, nombre]) => `
+      <button class="vb-tab-l1 ${perfil === id ? 'active' : ''}" onclick="selectPerfil('${id}')">
+        <span class="dot"></span>${nombre}
+      </button>
+    `).join('');
+  } else if (!view) {
+    // Nivel 2 (el menú de cuadrados de una sección): a esto se llegó desde el
+    // menú superior, así que arriba van Colección/Herramientas/Redes Sociales.
+    center = Object.entries(SECTIONS).map(([id, s]) => `
+      <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
+        <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
+      </button>
+    `).join('');
+  } else {
+    // Nivel 3 (dentro de una vista/herramienta concreta): a esto se llegó desde
+    // el menú de su sección, así que arriba van los cuadrados de esa sección.
+    const s = SECTIONS[seccion];
+    center = s.views.map(v => `
+      <button class="vb-tab-l1 ${view === v.id ? 'active' : ''}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
+        <span class="dot"></span>${v.label}
+      </button>
+    `).join('');
+  }
   el.innerHTML = `
     <div class="vb-tabs-l1-side"></div>
     <div class="vb-tabs-l1-center">${center}</div>
