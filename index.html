@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.30 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.32 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.30</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.32</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -4410,7 +4410,7 @@ function renderView() {
   if (view === 'config') { renderConfig(); return; }
   if (view === 'sesiones') { renderSesiones(); return; }
   if (view === 'temasjuntos') { renderTemasJuntos(); return; }
-  if (view === 'kallax') { renderKallaxBrowser(); return; }
+  if (view === 'kallax') { (perfil === 'paquillo' ? renderEstanteriaPaquillo() : renderKallaxBrowser()); return; }
   if (view === 'buscador') { renderBuscador(); return; }
   if (view === 'cortador') { renderCortador(); return; }
   if (view === 'auditoria') { renderAuditoria(); return; }
@@ -4569,10 +4569,21 @@ function renderView() {
   }
 }
 
-// Insignia de ubicación en el detalle: hueco + posición dentro de ese hueco
-// (de menor a mayor referencia de catálogo, igual que se colocan físicamente),
-// sobre el aforo configurado (kallaxConfig.porHueco, p.ej. 100 por hueco).
+function esDePaquillo(row) {
+  return (g(row, COL.propietario) || '').toLowerCase() === 'paquillo';
+}
+
+// Insignia de ubicación en el detalle. Para los discos de Petrik: hueco + posición
+// dentro de ese hueco (sobre el aforo configurado). Para los de Paquillo: no tiene
+// Kallax — tiene una única estantería, así que solo mostramos en qué posición va
+// dentro de ella, calculado por orden de referencia (no hay hueco que elegir).
 function kallaxBadge(row) {
+  if (esDePaquillo(row)) {
+    const suyos = allData.filter(r => isVinyl(r) && esDePaquillo(r))
+      .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
+    const pos = suyos.indexOf(row) + 1;
+    return `<div class="d-kallax-badge">📍 Estantería · posición ${pos > 0 ? pos : '?'}/${suyos.length}</div>`;
+  }
   const slot = g(row, COL.kallax_slot);
   if (!slot) return `<div class="d-kallax-badge d-kallax-badge-empty">Sin ubicar en Kallax</div>`;
   const sameSlot = allData.filter(r => g(r, COL.kallax_slot) === slot)
@@ -4749,7 +4760,11 @@ function renderDetail(row) {
       </div>
       ${isVinyl(row) ? `<button class="btn" style="font-size:11px;color:var(--red);margin-top:6px" onclick="reclasificarComoDigital(${allData.indexOf(row)})" title="Para discos que en realidad nunca fueron vinilo — se metieron en Discogs como si lo fueran hace tiempo">🔁 Esto no era vinilo de verdad — reclasificar a digital</button>` : ''}
 
-      ${isVinyl(row) ? `
+      ${isVinyl(row) && esDePaquillo(row) ? `
+      <div class="d-section">Estantería</div>
+      <p style="font-size:11px;color:var(--text2)">Tu estantería no tiene huecos — la posición se calcula sola por orden de referencia de catálogo, según vas añadiendo discos.</p>
+      ` : ''}
+      ${isVinyl(row) && !esDePaquillo(row) ? `
       <div class="d-section">Ubicación Kallax</div>
       <button class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:8px" onclick="colocarKallaxAutomatico(${allData.indexOf(row)})" title="Calcula el hueco que le toca por orden de catálogo, y qué otros discos hay que mover para hacerle sitio">
         📐 Colocar automáticamente por catálogo
@@ -6239,13 +6254,13 @@ function copyLink() {
 // ─── KALLAX ───────────────────────────────────────────────────────────────────
 // true = hueco con vinilos, false = vacío/no usado
 const KALLAX_2x4 = [
-  [null, null, 2,  1], // fila 1: huecos 1 y 2 (derecha a izquierda)
-  [null, 5,    4,  3], // fila 2: huecos 3, 4, 5
+  [null, null, 1,  2], // fila 1: huecos 1 y 2 (izquierda a derecha)
+  [null, 3,    4,  5], // fila 2: huecos 3, 4, 5
 ];
 const KALLAX_4x4 = [
-  [9,    8,    7,  6 ], // fila 1: huecos 6-9
-  [null, 12,   11, 10], // fila 2: huecos 10-12
-  [null, 15,   14, 13], // fila 3: huecos 13-15
+  [6,    7,    8,  9 ], // fila 1: huecos 6-9
+  [null, 10,   11, 12], // fila 2: huecos 10-12
+  [null, 13,   14, 15], // fila 3: huecos 13-15
   [null, null, null, null], // fila 4: no se usa
 ];
 
@@ -6401,6 +6416,53 @@ function pintarTarjetasKallaxHueco(discos) {
             <option value="">— Quitar de Kallax —</option>
             ${opcionesHueco.map(n => `<option value="${n}" ${String(n) === String(g(r, COL.kallax_slot)) ? 'selected' : ''}>Hueco ${n}</option>`).join('')}
           </select>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+// Estantería de Paquillo: no tiene Kallax con huecos — es una única estantería
+// ordenada por referencia de catálogo, así que solo mostramos la posición (1, 2, 3...).
+async function renderEstanteriaPaquillo() {
+  const discos = allData.filter(r => isVinyl(r) && esDePaquillo(r))
+    .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
+
+  document.getElementById('main-content').innerHTML = `
+    <div class="content-header"><div style="font-weight:600">📚 Estantería — ${discos.length} disco${discos.length === 1 ? '' : 's'}</div></div>
+    <div id="estanteria-cards" style="padding:16px;overflow-y:auto;flex:1">
+      ${discos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">Aún no hay ningún disco marcado como tuyo (columna "Propietario" en el Sheet).</p>` : `<div class="state-center"><div class="spinner"></div><p>Cargando carátulas y canciones...</p></div>`}
+    </div>
+  `;
+  if (!discos.length) return;
+
+  await Promise.all(discos.map(loadCoverForRow));
+  if (view !== 'kallax' || perfil !== 'paquillo') return;
+  pintarTarjetasEstanteria(discos);
+}
+
+function pintarTarjetasEstanteria(discos) {
+  const cont = document.getElementById('estanteria-cards');
+  if (!cont) return;
+  cont.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px">
+    ${discos.map((r, i) => {
+      const idx = allData.indexOf(r);
+      const releaseId = g(r, COL.release_id);
+      const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+      const cover = cleanId ? coverCache[cleanId] : undefined;
+      const tracklist = cleanId ? tracklistCache[cleanId] : undefined;
+      return `<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column">
+        <div style="width:100%;aspect-ratio:1;background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative" onclick="abrirDiscoDesdeKallax(${idx})">
+          ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
+          <div style="position:absolute;top:6px;left:6px;background:var(--accent);color:#fff;font-family:var(--font-mono);font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px">#${i + 1}</div>
+        </div>
+        <div style="padding:10px">
+          <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">${g(r,COL.artist)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.title)}</div>
+          <div class="d-kallax-badge" style="margin-bottom:6px">📍 Posición ${i + 1}/${discos.length}</div>
+          <div style="max-height:120px;overflow-y:auto">
+            ${tracklist === undefined ? `<div style="font-size:10px;color:var(--text3)">Cargando canciones...</div>` : (!tracklist || tracklist.length === 0) ? `<div style="font-size:10px;color:var(--text3)">Sin tracklist en Discogs</div>` : tracklist.map(t => `<div style="font-size:10.5px;padding:2px 0;border-bottom:1px dashed var(--border)">${t.position ? t.position + ' — ' : ''}${t.title}</div>`).join('')}
+          </div>
         </div>
       </div>`;
     }).join('')}
@@ -6668,7 +6730,7 @@ function renderTabsL1() {
     const s = SECTIONS[seccion];
     center = s.views.map(v => `
       <button class="vb-tab-l1 ${view === v.id ? 'active' : ''}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
-        <span class="dot"></span>${v.label}
+        <span class="dot"></span>${v.id === 'kallax' && perfil === 'paquillo' ? 'Estantería' : v.label}
       </button>
     `).join('');
   }
@@ -6688,15 +6750,20 @@ function renderSeccionMenu() {
   document.getElementById('main-content').innerHTML = `
     <div class="tool-menu">
       <div class="tool-menu-grid" style="grid-template-columns:repeat(${cols},1fr)">
-        ${s.views.map((v, i) => `
+        ${s.views.map((v, i) => {
+          const esCuadroKallax = v.id === 'kallax';
+          const label = esCuadroKallax && perfil === 'paquillo' ? 'Estantería' : v.label;
+          const stamp = esCuadroKallax && perfil === 'paquillo' ? 'ES' : v.stamp;
+          return `
           <button class="tool-tile" data-accent="${accents[i % accents.length]}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
             ${TILE_BG_IMAGES[v.id] ? `<div class="tool-tile-bg" style="background-image:url(${TILE_BG_IMAGES[v.id]});filter:blur(${fotoBlur}px)"></div><div class="tool-tile-veil"></div>` : ''}
             <div class="tool-tile-content">
-              <div class="tile-stamp">${v.stamp || '·'}</div>
-              <div class="tool-tile-name">${v.label}</div>
+              <div class="tile-stamp">${stamp || '·'}</div>
+              <div class="tool-tile-name">${label}</div>
             </div>
           </button>
-        `).join('')}
+        `;
+        }).join('')}
       </div>
     </div>
   `;
