@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.35 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.36 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.35</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.36</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -2194,7 +2194,7 @@ async function marcarRipeadosYColocarKallax(discosSesion) {
     const yaRipeado = g(row, COL.ripeado).toLowerCase() === 'sí' || g(row, COL.ripeado).toLowerCase() === 'si';
     if (!yaRipeado) {
       row[COL.ripeado] = 'Sí';
-      if (!row[COL.ripeado_por]) row[COL.ripeado_por] = 'DJ Petrik';
+      if (!row[COL.ripeado_por]) row[COL.ripeado_por] = nombreRipeadorActual();
       idxsTocados.add(idx);
     }
     if (!g(row, COL.kallax_slot)) idxsParaKallax.push(idx);
@@ -2591,7 +2591,7 @@ async function resolverCarpetaDuplicada(idx, nombreElegido, nombreDescartado) {
 function marcarRipeadoDesdeAuditoria(idx) {
   const row = allData[idx];
   row[COL.ripeado] = 'Sí';
-  if (!row[COL.ripeado_por]) row[COL.ripeado_por] = 'DJ Petrik';
+  if (!row[COL.ripeado_por]) row[COL.ripeado_por] = nombreRipeadorActual();
   saveToSheet(idx);
   if (auditoriaResults) {
     auditoriaResults.faltanMarcar = auditoriaResults.faltanMarcar.filter(e => e.idx !== idx);
@@ -4577,6 +4577,12 @@ function setPropietario(idx, valor) {
   saveToSheet(idx);
 }
 
+// Quién figura como "ripeado por" cuando se marca algo sin decir nombre a mano —
+// el que esté activo ahora mismo, no siempre Petrik.
+function nombreRipeadorActual() {
+  return perfil === 'paquillo' ? 'Paquillo' : 'DJ Petrik';
+}
+
 function esDePaquillo(row) {
   return (g(row, COL.propietario) || '').toLowerCase() === 'paquillo';
 }
@@ -4741,8 +4747,8 @@ function renderDetail(row) {
 
       <div class="d-label" style="margin-bottom:4px">¿Quién ripeó?</div>
       <div class="ripper-sel">
-        <div class="ripper-opt ${ripper.toLowerCase().includes('petrik')||ripper==='DJ'?'on-you':''}" onclick="setRipper(${allData.indexOf(row)},'DJ Petrik')">Tú (DJ Petrik)</div>
-        <div class="ripper-opt ${ripper.toLowerCase().includes('paquillo')?'on-paquillo':''}" onclick="setRipper(${allData.indexOf(row)},'Paquillo')">Paquillo</div>
+        <div class="ripper-opt ${(perfil === 'paquillo' ? ripper.toLowerCase().includes('paquillo') : (ripper.toLowerCase().includes('petrik')||ripper==='DJ')) ? 'on-you' : ''}" onclick="setRipper(${allData.indexOf(row)},'${nombreRipeadorActual()}')">Tú (${PERFIL_NOMBRES[perfil] || 'DJ Petrik'})</div>
+        <div class="ripper-opt ${(perfil === 'paquillo' ? (ripper.toLowerCase().includes('petrik')||ripper==='DJ') : ripper.toLowerCase().includes('paquillo')) ? 'on-paquillo' : ''}" onclick="setRipper(${allData.indexOf(row)},'${perfil === 'paquillo' ? 'DJ Petrik' : 'Paquillo'}')">${perfil === 'paquillo' ? 'DJ Petrik' : 'Paquillo'}</div>
       </div>
 
       <div class="d-field" style="margin-top:8px">
@@ -5760,7 +5766,7 @@ function toggleRipped(idx) {
   const row = allData[idx];
   const isRipped = g(row, COL.ripeado).toLowerCase() === 'si' || g(row, COL.ripeado).toLowerCase() === 'sí';
   row[COL.ripeado] = isRipped ? 'No' : 'Sí';
-  if (!isRipped && !row[COL.ripeado_por]) row[COL.ripeado_por] = 'DJ Petrik';
+  if (!isRipped && !row[COL.ripeado_por]) row[COL.ripeado_por] = nombreRipeadorActual();
   selectedRow = row;
   renderStats();
   renderView();
