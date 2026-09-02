@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.47 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.48 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.47</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.48</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -2298,6 +2298,15 @@ async function createFolderForRow(idx) {
   } catch(e) {
     console.error(e);
     showToast('⚠ Error al crear carpeta', true);
+    return;
+  }
+
+  // Crear la carpeta es la señal de que este disco se está ripeando ahora mismo — se apunta
+  // quién lo ripea (según el perfil activo: Petrik o Paquillo) si todavía no estaba puesto,
+  // para no tener que rellenarlo luego a mano en Vinilos.
+  if (!row[COL.ripeado_por]) {
+    row[COL.ripeado_por] = nombreRipeadorActual();
+    saveToSheet(idx);
   }
 }
 
@@ -5389,13 +5398,21 @@ function renderCortadorWorkPanel() {
             </div>`).join('')}
         </div>`;
 
+    const filaIdx = entry.manual ? null : allData.indexOf(entry.row);
+    const rowRef = entry.manual ? null : allData[filaIdx];
     return `<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg3);display:flex;flex-direction:column;min-width:0">
       <div ${coverDropAttrs} style="width:100%;aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">${coverHtml}</div>
       <div style="padding:8px">
         <div style="font-size:9px;color:var(--text3);margin-bottom:1px">DISCO ${idx + 1}</div>
         ${titleHtml}
         <div style="margin-top:8px">${tracksHtml}</div>
-        ${!entry.manual ? `<button class="btn" style="width:100%;justify-content:center;margin-top:8px;font-size:11px" onclick="createFolderForRow(${allData.indexOf(entry.row)})">📁 Crear carpeta de ripeo</button>` : ''}
+        ${!entry.manual ? `
+        <button class="btn" style="width:100%;justify-content:center;margin-top:8px;font-size:11px" onclick="createFolderForRow(${filaIdx})">📁 Crear carpeta de ripeo</button>
+        <div style="display:flex;gap:4px;margin-top:4px">
+          <button class="btn ${g(rowRef,COL.limpio)==='Sí' ? 'btn-accent' : ''}" style="flex:1;justify-content:center;font-size:10px;padding:4px" onclick="toggleLimpio(${filaIdx})" title="Marcar limpio/sin limpiar">🧼 ${g(rowRef,COL.limpio)==='Sí' ? 'Limpio' : 'Limpiar'}</button>
+          <button class="btn ${g(rowRef,COL.formato_rip)==='WAV' ? 'btn-accent' : ''}" style="flex:1;justify-content:center;font-size:10px;padding:4px" onclick="setField(${filaIdx},COL.formato_rip,'WAV')">WAV</button>
+          <button class="btn ${g(rowRef,COL.formato_rip)==='FLAC' ? 'btn-accent' : ''}" style="flex:1;justify-content:center;font-size:10px;padding:4px" onclick="setField(${filaIdx},COL.formato_rip,'FLAC')">FLAC</button>
+        </div>` : ''}
       </div>
     </div>`;
   }).join('');
