@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.44 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.46 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.44</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.46</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -354,7 +354,6 @@
         <div class="tool-tile-veil"></div>
         <div class="tool-tile-content">
           <div class="perfil-tile-name">Dj Petrik</div>
-          <div class="perfil-tile-desc">~1.300 vinilos · Kallax numerado, de Z hacia A</div>
         </div>
       </button>
       <button class="perfil-tile" data-accent="blue" onclick="selectPerfil('paquillo')">
@@ -362,7 +361,6 @@
         <div class="tool-tile-veil"></div>
         <div class="tool-tile-content">
           <div class="perfil-tile-name">Dj Paquillo</div>
-          <div class="perfil-tile-desc">~50 vinilos · estantería propia sin numerar, de menor a mayor referencia</div>
         </div>
       </button>
       <button class="perfil-tile" data-accent="amber" onclick="selectPerfil('juntos')">
@@ -487,7 +485,9 @@ const COL = {
   limpio: 30,
   fecha_limpieza: 31,
   limpieza_profunda: 32,
-  propietario: 33
+  propietario: 33,
+  caratula_url: 34,
+  tracklist_json: 35
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -4231,6 +4231,28 @@ async function loadData() {
       showToast('⚠ No se pudo conectar con Google Sheets', true);
     }
   }
+  precargarCaratulasDesdeSheet();
+}
+
+// Las carátulas/tracklists que ya se hayan guardado en el propio Sheet (por ti o por
+// Paquillo, en cualquier sesión anterior) se cargan aquí directamente en coverCache/
+// tracklistCache — sin pedir NADA a Discogs. Es lo que de verdad quita presión al límite de
+// 60/min: una vez que un disco se ha visto UNA vez entre los dos, no se vuelve a pedir jamás,
+// y encima sale al instante (ni siquiera hace falta esperar una promesa).
+function precargarCaratulasDesdeSheet() {
+  let n = 0;
+  for (const row of allData) {
+    const releaseId = g(row, COL.release_id);
+    if (!releaseId) continue;
+    const cleanId = releaseId.toString().slice(0, -1);
+    if (coverCache[cleanId] !== undefined) continue; // ya lo teníamos (p.ej. de localStorage)
+    const urlGuardada = g(row, COL.caratula_url);
+    if (!urlGuardada) continue; // este disco todavía no se ha guardado — se pedirá a Discogs cuando toque
+    coverCache[cleanId] = urlGuardada === 'NINGUNA' ? null : urlGuardada;
+    try { tracklistCache[cleanId] = JSON.parse(g(row, COL.tracklist_json) || '[]'); } catch(e) { tracklistCache[cleanId] = []; }
+    n++;
+  }
+  if (n) guardarCacheCaratulas();
 }
 
 function parseCSV(text) {
@@ -5743,6 +5765,21 @@ async function esperarTurnoDiscogs() {
   discogsProximoInicio = Date.now() + 1050; // ~57 peticiones/min como máximo, sea cual sea quien las pida
 }
 
+// Guarda la carátula/tracklist recién conseguida de Discogs en el propio Sheet, para que la
+// próxima vez (tuya o de Paquillo, en cualquier dispositivo) ni haga falta pedírselo a Discogs.
+// Sin toast ni verificación — es en segundo plano y puede pasar cientos de veces seguidas al
+// recorrer un hueco entero, así que tiene que ser silencioso y barato. Si falla el guardado
+// (sin conexión, lo que sea), no pasa nada grave: simplemente se volverá a pedir a Discogs la
+// próxima vez, ni mejor ni peor que como funcionaba hasta ahora.
+function guardarCaratulaEnSheet(row, img, tracklist) {
+  row[COL.caratula_url] = img || 'NINGUNA';
+  row[COL.tracklist_json] = JSON.stringify(tracklist || []);
+  postToSheet(row, [
+    { col: COL.caratula_url,   value: row[COL.caratula_url] },
+    { col: COL.tracklist_json, value: row[COL.tracklist_json] },
+  ]).catch(e => console.error('[guardarCaratulaEnSheet]', e));
+}
+
 async function loadCoverForRow(row) {
   const releaseId = g(row, COL.release_id);
   if (!releaseId) return null;
@@ -5753,6 +5790,21 @@ async function loadCoverForRow(row) {
   // mirábamos coverCache, esta función se saltaba entera y la tracklist se quedaba sin
   // traer nunca (hasta recargar la página, que vacía los cachés y fuerza a traerlo todo).
   if (coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined) return coverCache[cleanId];
+
+  // Ya guardado en el Sheet (por ti o por Paquillo, en cualquier sesión anterior) — se usa
+  // directo, CERO peticiones a Discogs. precargarCaratulasDesdeSheet ya hace esto para toda
+  // la colección al cargar la página; esto es solo por si acaso (p.ej. un disco añadido a
+  // mitad de sesión sin recargar).
+  const urlGuardada = g(row, COL.caratula_url);
+  if (urlGuardada) {
+    const img = urlGuardada === 'NINGUNA' ? null : urlGuardada;
+    let tracklist;
+    try { tracklist = JSON.parse(g(row, COL.tracklist_json) || '[]'); } catch(e) { tracklist = []; }
+    coverCache[cleanId] = img;
+    tracklistCache[cleanId] = tracklist;
+    guardarCacheCaratulas();
+    return img;
+  }
 
   // Antes: cada reintento volvía a pedir turno en la cola global (esperarTurnoDiscogs), además
   // de su propia espera — así que un disco con 2-3 reintentos se comía 2-3 turnos de la cola
@@ -5788,6 +5840,7 @@ async function loadCoverForRow(row) {
       }));
       delete coverFetchErrors[cleanId];
       guardarCacheCaratulas();
+      guardarCaratulaEnSheet(row, img, tracklistCache[cleanId]);
       return img;
     } catch(e) {
       console.error('[loadCoverForRow] release', cleanId, 'intento', intento, e);
@@ -5804,6 +5857,7 @@ async function loadCoverForRow(row) {
         coverCache[cleanId] = null;
         tracklistCache[cleanId] = null;
         guardarCacheCaratulas();
+        guardarCaratulaEnSheet(row, null, []);
       }
       coverFetchErrors[cleanId] = e.message || 'Error desconocido';
       return null;
