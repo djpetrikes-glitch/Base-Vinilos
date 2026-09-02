@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.46 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.47 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.46</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.47</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -510,11 +510,11 @@ let sortCol = 'catalog';
 let sortDir = 1;
 let searchQ = '';
 
-// Ajustes de las estanterías Kallax — cuántos huecos activos hay y cuántos discos caben
-// en cada uno. Editable en Configuración, para poder ajustarlo sin tocar código si al
-// final no caben 100 en un hueco o se añaden más huecos en el futuro.
+// Ajustes de las estanterías Kallax — cuántos discos caben en cada hueco. Editable en
+// Configuración por si al final no caben 100 en un hueco. Cuántos huecos hay ya NO se
+// configura aquí — sale de la cuadrícula física real (KALLAX_TODOS_HUECOS, más abajo).
 const KALLAX_CONFIG_KEY = 'vinylbase_kallaxConfig';
-let kallaxConfig = { numHuecos: 13, porHueco: 100 };
+let kallaxConfig = { porHueco: 100 };
 try {
   const savedKallax = JSON.parse(localStorage.getItem(KALLAX_CONFIG_KEY) || 'null');
   if (savedKallax) kallaxConfig = { ...kallaxConfig, ...savedKallax };
@@ -4978,9 +4978,8 @@ function renderConfig() {
       </div>
       <div class="config-section">
         <h3>Estanterías Kallax</h3>
-        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Cuántos huecos hay activos ahora mismo (los que se usan para colocar automáticamente por catálogo) y cuántos discos caben en cada uno.</p>
+        <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Tu Kallax física tiene 15 huecos (los mismos que ves en la cuadrícula de Colocación) — eso ya no se configura aquí, se coloca automáticamente por catálogo empezando por el 15 y bajando. Lo único que se ajusta es cuántos discos caben en cada hueco.</p>
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
-          <div class="field-g"><label>Huecos activos</label><input type="number" min="1" value="${kallaxConfig.numHuecos}" style="width:80px" onchange="kallaxConfig.numHuecos=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
           <div class="field-g"><label>Discos por hueco</label><input type="number" min="1" value="${kallaxConfig.porHueco}" style="width:80px" onchange="kallaxConfig.porHueco=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
         </div>
         <button class="btn" style="width:100%;justify-content:center;margin-bottom:8px;font-size:11px" onclick="limpiarKallaxDeDigitales()" title="Quita el hueco de Kallax a cualquier disco que no sea vinilo físico">🧹 Quitar Kallax de los digitales (por si alguno se coló)</button>
@@ -6451,13 +6450,17 @@ function compareNatural(a, b) {
 
 // Calcula dónde debería ir CADA disco ya colocado (más el nuevo, idxNuevo) si se ordenan
 // todos por referencia de catálogo (de más baja a más alta) y se reparten en tandas de
-// kallaxConfig.porHueco por hueco — el hueco MÁS ALTO (numHuecos) se lleva las referencias
-// más bajas y se llena primero; según va creciendo la colección, se sigue por el hueco
-// anterior, y así hacia el hueco 1 (así coloca físicamente Nicolás su Kallax — al revés
-// de numerar 1,2,3...: empieza por el hueco más alto y baja). Solo devuelve los que de
-// verdad cambian de hueco respecto a donde están ahora (normalmente muy pocos, los que
-// caen justo en el borde entre dos huecos).
+// kallaxConfig.porHueco por hueco — el hueco MÁS ALTO que existe de verdad en tu Kallax
+// (KALLAX_TODOS_HUECOS, no el ajuste "Huecos activos") se lleva las referencias más bajas y
+// se llena primero; según va creciendo la colección, se sigue por el hueco anterior, y así
+// hacia el hueco 1 (así coloca físicamente Nicolás su Kallax — al revés de numerar 1,2,3...:
+// empieza por el hueco más alto y baja). Antes esto miraba kallaxConfig.numHuecos, que por
+// defecto está en 13 y nunca se había tocado — así que empezaba a colocar en el 13 en vez del
+// 15, aunque la Kallax física (y su propia cuadrícula visual) sí llega hasta el 15. Solo
+// devuelve los que de verdad cambian de hueco respecto a donde están ahora (normalmente muy
+// pocos, los que caen justo en el borde entre dos huecos).
 function calcularRecolocacionKallax(idxNuevoOVarios) {
+  const huecoMasAlto = KALLAX_TODOS_HUECOS[KALLAX_TODOS_HUECOS.length - 1];
   const nuevos = Array.isArray(idxNuevoOVarios) ? idxNuevoOVarios : [idxNuevoOVarios];
   const idxSet = new Set();
   allData.forEach((r, i) => { if (g(r, COL.kallax_slot)) idxSet.add(i); });
@@ -6465,10 +6468,10 @@ function calcularRecolocacionKallax(idxNuevoOVarios) {
   const idxs = [...idxSet];
   idxs.sort((ia, ib) => compareNatural(g(allData[ia], COL.catalog), g(allData[ib], COL.catalog)));
 
-  const overflow = idxs.length > kallaxConfig.numHuecos * kallaxConfig.porHueco;
+  const overflow = idxs.length > KALLAX_TODOS_HUECOS.length * kallaxConfig.porHueco;
   const moves = [];
   idxs.forEach((i, pos) => {
-    const huecoIdeal = Math.max(1, kallaxConfig.numHuecos - Math.floor(pos / kallaxConfig.porHueco));
+    const huecoIdeal = Math.max(1, huecoMasAlto - Math.floor(pos / kallaxConfig.porHueco));
     const huecoActual = g(allData[i], COL.kallax_slot);
     if (String(huecoActual) !== String(huecoIdeal)) {
       moves.push({ idx: i, from: huecoActual || null, to: huecoIdeal });
@@ -6488,11 +6491,11 @@ async function colocarTodosRipeadosEnKallax() {
 
   const { moves, overflow, total } = calcularRecolocacionKallax(idxs);
   if (overflow) {
-    showToast(`⚠ No caben todos: ${total} discos para ${kallaxConfig.numHuecos} huecos de ${kallaxConfig.porHueco} — ajusta esto en Configuración`, true);
+    showToast(`⚠ No caben todos: ${total} discos para ${KALLAX_TODOS_HUECOS.length} huecos de ${kallaxConfig.porHueco} — sube "Discos por hueco" en Configuración`, true);
     return;
   }
   if (!moves.length) { showToast('✓ Ya estaban todos en el hueco que les toca por catálogo'); return; }
-  if (!confirm(`Voy a colocar ${total} vinilos ripeados por orden de catálogo, empezando por el hueco ${kallaxConfig.numHuecos} hacia abajo.\n\nEsto va a mover ${moves.length} disco(s) de hueco.\n\n¿Seguro?`)) return;
+  if (!confirm(`Voy a colocar ${total} vinilos ripeados por orden de catálogo, empezando por el hueco ${KALLAX_TODOS_HUECOS[KALLAX_TODOS_HUECOS.length - 1]} hacia abajo.\n\nEsto va a mover ${moves.length} disco(s) de hueco.\n\n¿Seguro?`)) return;
 
   showToast(`Colocando ${moves.length} discos...`);
   moves.forEach(m => { allData[m.idx][COL.kallax_slot] = String(m.to); });
@@ -6512,7 +6515,7 @@ async function colocarTodosRipeadosEnKallax() {
 async function colocarKallaxAutomatico(idx) {
   const { moves, overflow, total } = calcularRecolocacionKallax(idx);
   if (overflow) {
-    showToast(`⚠ No caben todos: ${total} discos para ${kallaxConfig.numHuecos} huecos de ${kallaxConfig.porHueco} — ajusta esto en Configuración`, true);
+    showToast(`⚠ No caben todos: ${total} discos para ${KALLAX_TODOS_HUECOS.length} huecos de ${kallaxConfig.porHueco} — sube "Discos por hueco" en Configuración`, true);
     return;
   }
   if (!moves.length) {
