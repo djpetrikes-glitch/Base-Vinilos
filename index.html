@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.43 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.44 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.43</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.44</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -440,7 +440,6 @@
 const SHEET_ID = '1dirHbYXyfAnumKjOuLAlY4-qFAK1QEzpPJfB6WPlFw8';
 const SHEET_NAME = 'Hoja 1';
 const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQruvZCIhyMdcRDgbUzfihajC9_uGRCsBtecaGUkPesaK7gRXtxWw8s2UogFWmf3g/pub?gid=540728476&single=true&output=csv';
-const DISCOGS_TOKEN = 'unJlhQxWTHJZMWOBPoAuNjtIZxaVEUQnKUDWReVg';
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyNMer8AHPlNigQDb_YSrjRkRSqNXdDDz5Wv30q9002m_wxhKJNyDeMj99XzsZ0ENBHKg/exec';
 // Foto de "Thoma House" (uno de tus vinilos) mejorada y difuminada fuerte, de fondo
 // en el cuadrado de "Añadir vinilo" dentro de Herramientas.
@@ -459,7 +458,18 @@ const TILE_BG_IMAGES = {
   nuevovinilo: CARATULA_ANADIR_BG,
   vinilos: KALLAX_VINILOS_BG,
 };
-const DISCOGS_HEADERS = { 'Authorization': `Discogs token=${DISCOGS_TOKEN}`, 'User-Agent': 'VinylBase/1.2 +djpetrik' };
+// Un token de Discogs por perfil, en vez de uno solo compartido — el límite de 60/min de
+// Discogs es POR TOKEN, así que si Petrik y Paquillo usan el mismo, sus peticiones se pisan
+// entre sí sin que ninguno de los dos lo sepa (cada navegador solo controla su propio ritmo,
+// no el del otro). Con un token cada uno, cada cual tiene su propio cupo independiente.
+// Paquillo: Discogs.com → Configuración → Desarrolladores → "Generate new token" (gratis),
+// y pega aquí ese token. Hasta que lo rellenes, su perfil sigue usando el de Petrik.
+const DISCOGS_TOKEN_PETRIK = 'unJlhQxWTHJZMWOBPoAuNjtIZxaVEUQnKUDWReVg';
+const DISCOGS_TOKEN_PAQUILLO = ''; // ← pega aquí el token de Paquillo cuando lo tenga
+function discogsHeaders() {
+  const token = (perfil === 'paquillo' && DISCOGS_TOKEN_PAQUILLO) ? DISCOGS_TOKEN_PAQUILLO : DISCOGS_TOKEN_PETRIK;
+  return { 'Authorization': `Discogs token=${token}`, 'User-Agent': 'VinylBase/1.2 +djpetrik' };
+}
 const coverCache = {};
 
 // Columnas del sheet (índice 0)
@@ -5755,7 +5765,7 @@ async function loadCoverForRow(row) {
   for (let intento = 1; intento <= intentosMax; intento++) {
     if (intento === 1) await esperarTurnoDiscogs();
     try {
-      const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: DISCOGS_HEADERS });
+      const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: discogsHeaders() });
       if (!res.ok) {
         let motivo = `HTTP ${res.status}`;
         try { motivo = (await res.json()).message || motivo; } catch(e) {}
@@ -6116,7 +6126,7 @@ function extractDiscogsReleaseId(input) {
 // pegaste el ID y le diste directamente a Añadir sin pulsar Rellenar antes).
 async function traerDatosDeDiscogsPorId(idLimpio) {
   try {
-    const res = await fetch(`https://api.discogs.com/releases/${idLimpio}`, { headers: DISCOGS_HEADERS });
+    const res = await fetch(`https://api.discogs.com/releases/${idLimpio}`, { headers: discogsHeaders() });
     if (!res.ok) {
       let motivo = `HTTP ${res.status}`;
       try { motivo = (await res.json()).message || motivo; } catch(e) {}
@@ -6256,7 +6266,7 @@ async function searchDiscogs() {
   document.getElementById('discogs-btn-label').textContent = 'Buscando...';
   try {
     const res = await fetch(`https://api.discogs.com/database/search?q=${encodeURIComponent(q)}&type=release&per_page=6&format=Vinyl`, {
-      headers: DISCOGS_HEADERS
+      headers: discogsHeaders()
     });
     if (!res.ok) {
       const cuerpo = await res.text();
