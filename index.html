@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.36 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.37 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.36</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.37</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -2364,7 +2364,7 @@ async function restaurarProgresoCortador() {
     cortadorSessionDiscs = discosRestaurados;
     // Esperar a que lleguen las carátulas/tracklists de Discogs antes de intentar
     // reconstruir los ya validados (los necesita para encontrar el tema exacto).
-    await Promise.all(cortadorSessionDiscs.filter(e => !e.manual).map(e => loadCoverForRow(e.row)));
+    await loadCoversThrottled(cortadorSessionDiscs.filter(e => !e.manual).map(e => e.row));
 
     const validadosRestaurados = {};
     for (const [position, v] of Object.entries(data.validatedTracks || {})) {
@@ -5731,10 +5731,32 @@ async function loadCoverForRow(row) {
     return img;
   } catch(e) {
     console.error('[loadCoverForRow] release', cleanId, e);
-    coverCache[cleanId] = null;
-    tracklistCache[cleanId] = null;
+    // Un 429 (demasiadas peticiones) es temporal — si lo cacheamos como null se queda
+    // "sin carátula" para siempre en esta sesión, aunque Discogs sí la tenga. Solo cacheamos
+    // como definitivo un fallo real (404, release inválido, etc.), para que el 429 se reintente
+    // la próxima vez que se pida este disco.
+    const esRateLimit = /429|too many requests/i.test(e.message || '');
+    if (!esRateLimit) {
+      coverCache[cleanId] = null;
+      tracklistCache[cleanId] = null;
+    }
     coverFetchErrors[cleanId] = e.message || 'Error desconocido';
     return null;
+  }
+}
+
+// Carga carátulas/tracklists de varios discos SIN bombardear la API de Discogs — el límite
+// con token es 60 peticiones/minuto, y pedirlas todas de golpe con Promise.all provoca 429
+// en cadena (eso era el bug de "no salen todas las carátulas" en Kallax). Aquí se piden de
+// una en una, con una pequeña pausa entre peticiones reales; los discos que ya están en
+// caché no cuentan ni esperan, así que reabrir un hueco ya visto sigue siendo instantáneo.
+async function loadCoversThrottled(rows, delayMs = 1100) {
+  for (const row of rows) {
+    const releaseId = g(row, COL.release_id);
+    const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+    const yaEnCache = cleanId && coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined;
+    await loadCoverForRow(row);
+    if (!yaEnCache) await new Promise(resolve => setTimeout(resolve, delayMs));
   }
 }
 
@@ -6438,7 +6460,7 @@ async function renderKallaxBrowser() {
   `;
   if (!discos.length) return;
 
-  await Promise.all(discos.map(loadCoverForRow));
+  await loadCoversThrottled(discos);
   // Puede que mientras cargaba se haya cambiado de hueco o de vista — no pintar encima de otra cosa
   if (kallaxHuecoActivo !== slot || view !== 'kallax') return;
   pintarTarjetasKallaxHueco(discos);
@@ -6490,7 +6512,7 @@ async function renderEstanteriaPaquillo() {
   `;
   if (!discos.length) return;
 
-  await Promise.all(discos.map(loadCoverForRow));
+  await loadCoversThrottled(discos);
   if (view !== 'kallax' || perfil !== 'paquillo') return;
   pintarTarjetasEstanteria(discos);
 }
