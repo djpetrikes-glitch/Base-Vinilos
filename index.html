@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.41 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.43 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.41</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.43</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -5744,19 +5744,26 @@ async function loadCoverForRow(row) {
   // traer nunca (hasta recargar la página, que vacía los cachés y fuerza a traerlo todo).
   if (coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined) return coverCache[cleanId];
 
-  const intentosMax = 4;
+  // Antes: cada reintento volvía a pedir turno en la cola global (esperarTurnoDiscogs), además
+  // de su propia espera — así que un disco con 2-3 reintentos se comía 2-3 turnos de la cola
+  // compartida, alargando la espera de TODOS los demás discos y provocando que más se rindieran
+  // antes de que les llegara su turno. Ahora solo el primer intento pide turno en la cola; los
+  // reintentos usan solo su propia espera (ya de sobra mayor que un turno) sin robarle cola a
+  // nadie más. También se sube la paciencia — con lotes grandes (un hueco de 100+ discos nunca
+  // vistos) 4 intentos se quedaban cortos.
+  const intentosMax = 8;
   for (let intento = 1; intento <= intentosMax; intento++) {
-    await esperarTurnoDiscogs();
+    if (intento === 1) await esperarTurnoDiscogs();
     try {
       const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: DISCOGS_HEADERS });
       if (!res.ok) {
         let motivo = `HTTP ${res.status}`;
         try { motivo = (await res.json()).message || motivo; } catch(e) {}
-        // Un 429 se reintenta unas cuantas veces con una espera extra creciente, en vez de
-        // rendirse a la primera — así la tarjeta llega a resolverse en esta misma visita en
-        // vez de quedarse con el spinner girando para siempre.
+        // Un 429 se reintenta con una espera propia creciente (tope 8s), en vez de rendirse
+        // pronto — así la tarjeta llega a resolverse en esta misma visita en vez de quedarse
+        // con el spinner girando para siempre.
         if (res.status === 429 && intento < intentosMax) {
-          await new Promise(resolve => setTimeout(resolve, 1500 * intento));
+          await new Promise(resolve => setTimeout(resolve, Math.min(1500 * intento, 8000)));
           continue;
         }
         throw new Error(motivo);
@@ -5776,7 +5783,7 @@ async function loadCoverForRow(row) {
       console.error('[loadCoverForRow] release', cleanId, 'intento', intento, e);
       const esRateLimit = /429|too many requests/i.test(e.message || '');
       if (esRateLimit && intento < intentosMax) {
-        await new Promise(resolve => setTimeout(resolve, 1500 * intento));
+        await new Promise(resolve => setTimeout(resolve, Math.min(1500 * intento, 8000)));
         continue;
       }
       // Fallo real (404, release inválido...) se cachea como definitivo. Un 429 persistente
@@ -6721,13 +6728,47 @@ async function limpiarKallaxDeDigitales() {
   renderView();
 }
 
-function setKallaxSlot(idx, slot) {
+async function setKallaxSlot(idx, slot) {
   const val = (slot === '' || slot == null) ? '' : String(slot);
-  allData[idx][COL.kallax_slot] = val;
+
+  if (!val) {
+    allData[idx][COL.kallax_slot] = '';
+    selectedRow = allData[idx];
+    renderView();
+    showToast('✓ Quitado de Kallax');
+    saveToSheet(idx);
+    return;
+  }
+
+  // Poner un disco en Kallax — a mano o al ripear — SIEMPRE pasa por el mismo cálculo de
+  // catálogo con cascada que usa "Colocar automáticamente" (calcularRecolocacionKallax), en
+  // vez de dejarlo tal cual en el hueco pinchado. Así ningún hueco puede quedar nunca por
+  // encima de su capacidad — antes esto se saltaba aquí y así fue como un hueco llegó a
+  // pasarse de 100 (102/100): el desplegable rápido y la cuadrícula de la ficha ponían el
+  // valor sin más, sin cascada ni control de aforo.
+  allData[idx][COL.kallax_slot] = val; // provisional — el cálculo de abajo puede ajustarlo
+  const { moves, overflow, total } = calcularRecolocacionKallax(idx);
+  if (overflow) {
+    showToast(`⚠ No caben todos con tu configuración actual de Kallax (${total} discos) — ajusta "Huecos activos" en Configuración`, true);
+    selectedRow = allData[idx];
+    renderView();
+    saveToSheet(idx);
+    return;
+  }
+
+  moves.forEach(m => { allData[m.idx][COL.kallax_slot] = String(m.to); });
   selectedRow = allData[idx];
   renderView();
-  showToast(val ? '✓ Ubicado en hueco ' + val : '✓ Quitado de Kallax');
-  saveToSheet(idx);
+
+  const huecoFinal = g(allData[idx], COL.kallax_slot);
+  const otros = moves.filter(m => m.idx !== idx).length;
+  showToast(otros
+    ? `✓ Ubicado en hueco ${huecoFinal} — para hacer sitio, ${otros} disco${otros > 1 ? 's' : ''} más se ${otros > 1 ? 'movieron' : 'movió'} de hueco`
+    : `✓ Ubicado en hueco ${huecoFinal}`);
+
+  for (const m of moves) {
+    await saveToSheet(m.idx);
+  }
 }
 
 // ─── SEARCH ──────────────────────────────────────────────────────────────────
