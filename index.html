@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.37 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.39 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.37</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.39</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -5745,19 +5745,29 @@ async function loadCoverForRow(row) {
   }
 }
 
-// Carga carátulas/tracklists de varios discos SIN bombardear la API de Discogs — el límite
+// Carga carátulas/tracklists de varios discos sin bombardear la API de Discogs — el límite
 // con token es 60 peticiones/minuto, y pedirlas todas de golpe con Promise.all provoca 429
-// en cadena (eso era el bug de "no salen todas las carátulas" en Kallax). Aquí se piden de
-// una en una, con una pequeña pausa entre peticiones reales; los discos que ya están en
-// caché no cuentan ni esperan, así que reabrir un hueco ya visto sigue siendo instantáneo.
-async function loadCoversThrottled(rows, delayMs = 1100) {
+// en cadena (eso era el bug original de "no salen todas las carátulas" en Kallax).
+// Aquí se espacía el INICIO de cada petición nueva (no cacheada) cada minIntervalMs, pero se
+// dejan solapar sus respuestas — así la latencia de red no se suma al espaciado y no tarda
+// más de lo estrictamente necesario para respetar el límite. onEach(row) se llama en cuanto
+// cada disco termina (con o sin éxito) para poder pintar cada carátula según va llegando, en
+// vez de esperar a que terminen todas antes de mostrar nada.
+async function loadCoversThrottled(rows, { minIntervalMs = 1050, onEach } = {}) {
+  let proximoInicio = 0;
+  const pendientes = [];
   for (const row of rows) {
     const releaseId = g(row, COL.release_id);
     const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
     const yaEnCache = cleanId && coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined;
-    await loadCoverForRow(row);
-    if (!yaEnCache) await new Promise(resolve => setTimeout(resolve, delayMs));
+    if (!yaEnCache) {
+      const esperar = proximoInicio - Date.now();
+      if (esperar > 0) await new Promise(res => setTimeout(res, esperar));
+      proximoInicio = Date.now() + minIntervalMs;
+    }
+    pendientes.push(loadCoverForRow(row).then(() => { if (onEach) onEach(row); }));
   }
+  await Promise.all(pendientes);
 }
 
 async function autoLoadCover(row) {
@@ -6306,6 +6316,10 @@ const KALLAX_4x4 = [
   [null, 13,   14, 15], // fila 3: huecos 13-15
   [null, null, null, null], // fila 4: no se usa
 ];
+// Todos los huecos que existen físicamente en la Kallax (según la cuadrícula de arriba),
+// sea cual sea el valor de "Huecos activos" en Configuración — ese ajuste solo decide desde
+// qué hueco empieza a rellenar "Colocar automáticamente", no cuáles se pueden elegir a mano.
+const KALLAX_TODOS_HUECOS = [...KALLAX_2x4, ...KALLAX_4x4].flat().filter(n => n !== null).sort((a, b) => a - b);
 
 // Comparación "natural" para las referencias de catálogo: STK9 tiene que ir ANTES que
 // STK10, no después (que es lo que saldría con una comparación de texto normal, porque
@@ -6453,49 +6467,66 @@ async function renderKallaxBrowser() {
     <div class="content-header" style="display:flex;align-items:center;gap:10px">
       <button class="btn" style="font-size:11px" onclick="kallaxHuecoActivo=null;renderView()">← Volver a Kallax</button>
       <div style="font-weight:600">🗄️ Hueco ${slot} — ${discos.length}/${kallaxConfig.porHueco} discos</div>
+      <div id="kallax-progreso" style="margin-left:auto;font-size:11px;color:var(--text3)"></div>
     </div>
     <div id="kallax-hueco-cards" style="padding:16px;overflow-y:auto;flex:1">
-      ${discos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">Este hueco está vacío.</p>` : `<div class="state-center"><div class="spinner"></div><p>Cargando carátulas y canciones...</p></div>`}
+      ${discos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">Este hueco está vacío.</p>` : ''}
     </div>
   `;
   if (!discos.length) return;
 
-  await loadCoversThrottled(discos);
-  // Puede que mientras cargaba se haya cambiado de hueco o de vista — no pintar encima de otra cosa
-  if (kallaxHuecoActivo !== slot || view !== 'kallax') return;
-  pintarTarjetasKallaxHueco(discos);
+  pintarTarjetasKallaxHueco(discos); // pinta ya mismo — con spinner en la carátula de lo que aún no está en caché
+  let cargados = 0;
+  await loadCoversThrottled(discos, {
+    onEach: (row) => {
+      cargados++;
+      if (kallaxHuecoActivo !== slot || view !== 'kallax') return;
+      actualizarTarjetaKallax(allData.indexOf(row));
+      const prog = document.getElementById('kallax-progreso');
+      if (prog) prog.textContent = cargados < discos.length ? `Cargando carátulas: ${cargados}/${discos.length}` : '';
+    }
+  });
+}
+
+function tarjetaKallaxHTML(r) {
+  const idx = allData.indexOf(r);
+  const releaseId = g(r, COL.release_id);
+  const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+  const cargado = !cleanId || coverCache[cleanId] !== undefined;
+  const cover = cleanId ? coverCache[cleanId] : null;
+  const tracklist = cleanId ? tracklistCache[cleanId] : null;
+  const opcionesHueco = KALLAX_TODOS_HUECOS;
+  return `<div id="kallax-card-${idx}" style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column">
+    <div style="width:100%;aspect-ratio:1;background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">
+      ${!cargado ? `<div class="spinner"></div>` : cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
+    </div>
+    <div style="padding:10px">
+      <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">${g(r,COL.artist)}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.title)}</div>
+      ${kallaxBadge(r)}
+      <div style="margin-top:6px;max-height:120px;overflow-y:auto">
+        ${!cargado ? `<div style="font-size:10px;color:var(--text3)">Cargando canciones...</div>` : (!tracklist || tracklist.length === 0) ? `<div style="font-size:10px;color:var(--text3)">Sin tracklist en Discogs</div>` : tracklist.map(t => `<div style="font-size:10.5px;padding:2px 0;border-bottom:1px dashed var(--border)">${t.position ? t.position + ' — ' : ''}${t.title}</div>`).join('')}
+      </div>
+      <select onchange="setKallaxSlot(${idx}, this.value)" style="width:100%;margin-top:8px;font-size:11px;padding:5px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)" title="Mover este disco a otro hueco, o quitarlo de Kallax">
+        <option value="">— Quitar de Kallax —</option>
+        ${opcionesHueco.map(n => `<option value="${n}" ${String(n) === String(g(r, COL.kallax_slot)) ? 'selected' : ''}>Hueco ${n}</option>`).join('')}
+      </select>
+    </div>
+  </div>`;
 }
 
 function pintarTarjetasKallaxHueco(discos) {
   const cont = document.getElementById('kallax-hueco-cards');
   if (!cont) return;
-  const opcionesHueco = Array.from({ length: kallaxConfig.numHuecos }, (_, i) => i + 1);
   cont.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px">
-    ${discos.map(r => {
-      const idx = allData.indexOf(r);
-      const releaseId = g(r, COL.release_id);
-      const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
-      const cover = cleanId ? coverCache[cleanId] : undefined;
-      const tracklist = cleanId ? tracklistCache[cleanId] : undefined;
-      return `<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column">
-        <div style="width:100%;aspect-ratio:1;background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">
-          ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
-        </div>
-        <div style="padding:10px">
-          <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">${g(r,COL.artist)}</div>
-          <div style="font-size:11px;color:var(--text2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.title)}</div>
-          ${kallaxBadge(r)}
-          <div style="margin-top:6px;max-height:120px;overflow-y:auto">
-            ${tracklist === undefined ? `<div style="font-size:10px;color:var(--text3)">Cargando canciones...</div>` : (!tracklist || tracklist.length === 0) ? `<div style="font-size:10px;color:var(--text3)">Sin tracklist en Discogs</div>` : tracklist.map(t => `<div style="font-size:10.5px;padding:2px 0;border-bottom:1px dashed var(--border)">${t.position ? t.position + ' — ' : ''}${t.title}</div>`).join('')}
-          </div>
-          <select onchange="setKallaxSlot(${idx}, this.value)" style="width:100%;margin-top:8px;font-size:11px;padding:5px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)" title="Mover este disco a otro hueco, o quitarlo de Kallax">
-            <option value="">— Quitar de Kallax —</option>
-            ${opcionesHueco.map(n => `<option value="${n}" ${String(n) === String(g(r, COL.kallax_slot)) ? 'selected' : ''}>Hueco ${n}</option>`).join('')}
-          </select>
-        </div>
-      </div>`;
-    }).join('')}
+    ${discos.map(r => tarjetaKallaxHTML(r)).join('')}
   </div>`;
+}
+
+function actualizarTarjetaKallax(idx) {
+  const el = document.getElementById(`kallax-card-${idx}`);
+  if (!el) return;
+  el.outerHTML = tarjetaKallaxHTML(allData[idx]);
 }
 
 // Estantería de Paquillo: no tiene Kallax con huecos — es una única estantería
@@ -6505,44 +6536,66 @@ async function renderEstanteriaPaquillo() {
     .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
 
   document.getElementById('main-content').innerHTML = `
-    <div class="content-header"><div style="font-weight:600">📚 Estantería — ${discos.length} disco${discos.length === 1 ? '' : 's'}</div></div>
+    <div class="content-header" style="display:flex;align-items:center;gap:10px">
+      <div style="font-weight:600">📚 Estantería — ${discos.length} disco${discos.length === 1 ? '' : 's'}</div>
+      <div id="estanteria-progreso" style="margin-left:auto;font-size:11px;color:var(--text3)"></div>
+    </div>
     <div id="estanteria-cards" style="padding:16px;overflow-y:auto;flex:1">
-      ${discos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">Aún no hay ningún disco marcado como tuyo (columna "Propietario" en el Sheet).</p>` : `<div class="state-center"><div class="spinner"></div><p>Cargando carátulas y canciones...</p></div>`}
+      ${discos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">Aún no hay ningún disco marcado como tuyo (columna "Propietario" en el Sheet).</p>` : ''}
     </div>
   `;
   if (!discos.length) return;
 
-  await loadCoversThrottled(discos);
-  if (view !== 'kallax' || perfil !== 'paquillo') return;
   pintarTarjetasEstanteria(discos);
+  let cargados = 0;
+  await loadCoversThrottled(discos, {
+    onEach: (row) => {
+      cargados++;
+      if (view !== 'kallax' || perfil !== 'paquillo') return;
+      actualizarTarjetaEstanteria(discos, row);
+      const prog = document.getElementById('estanteria-progreso');
+      if (prog) prog.textContent = cargados < discos.length ? `Cargando carátulas: ${cargados}/${discos.length}` : '';
+    }
+  });
+}
+
+function tarjetaEstanteriaHTML(r, i, total) {
+  const idx = allData.indexOf(r);
+  const releaseId = g(r, COL.release_id);
+  const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+  const cargado = !cleanId || coverCache[cleanId] !== undefined;
+  const cover = cleanId ? coverCache[cleanId] : null;
+  const tracklist = cleanId ? tracklistCache[cleanId] : null;
+  return `<div id="estanteria-card-${idx}" style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column">
+    <div style="width:100%;aspect-ratio:1;background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative" onclick="abrirDiscoDesdeKallax(${idx})">
+      ${!cargado ? `<div class="spinner"></div>` : cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
+      <div style="position:absolute;top:6px;left:6px;background:var(--accent);color:#fff;font-family:var(--font-mono);font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px">#${i + 1}</div>
+    </div>
+    <div style="padding:10px">
+      <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">${g(r,COL.artist)}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.title)}</div>
+      <div class="d-kallax-badge" style="margin-bottom:6px">📍 Posición ${i + 1}/${total}</div>
+      <div style="max-height:120px;overflow-y:auto">
+        ${!cargado ? `<div style="font-size:10px;color:var(--text3)">Cargando canciones...</div>` : (!tracklist || tracklist.length === 0) ? `<div style="font-size:10px;color:var(--text3)">Sin tracklist en Discogs</div>` : tracklist.map(t => `<div style="font-size:10.5px;padding:2px 0;border-bottom:1px dashed var(--border)">${t.position ? t.position + ' — ' : ''}${t.title}</div>`).join('')}
+      </div>
+    </div>
+  </div>`;
 }
 
 function pintarTarjetasEstanteria(discos) {
   const cont = document.getElementById('estanteria-cards');
   if (!cont) return;
   cont.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px">
-    ${discos.map((r, i) => {
-      const idx = allData.indexOf(r);
-      const releaseId = g(r, COL.release_id);
-      const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
-      const cover = cleanId ? coverCache[cleanId] : undefined;
-      const tracklist = cleanId ? tracklistCache[cleanId] : undefined;
-      return `<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column">
-        <div style="width:100%;aspect-ratio:1;background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative" onclick="abrirDiscoDesdeKallax(${idx})">
-          ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
-          <div style="position:absolute;top:6px;left:6px;background:var(--accent);color:#fff;font-family:var(--font-mono);font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px">#${i + 1}</div>
-        </div>
-        <div style="padding:10px">
-          <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">${g(r,COL.artist)}</div>
-          <div style="font-size:11px;color:var(--text2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.title)}</div>
-          <div class="d-kallax-badge" style="margin-bottom:6px">📍 Posición ${i + 1}/${discos.length}</div>
-          <div style="max-height:120px;overflow-y:auto">
-            ${tracklist === undefined ? `<div style="font-size:10px;color:var(--text3)">Cargando canciones...</div>` : (!tracklist || tracklist.length === 0) ? `<div style="font-size:10px;color:var(--text3)">Sin tracklist en Discogs</div>` : tracklist.map(t => `<div style="font-size:10.5px;padding:2px 0;border-bottom:1px dashed var(--border)">${t.position ? t.position + ' — ' : ''}${t.title}</div>`).join('')}
-          </div>
-        </div>
-      </div>`;
-    }).join('')}
+    ${discos.map((r, i) => tarjetaEstanteriaHTML(r, i, discos.length)).join('')}
   </div>`;
+}
+
+function actualizarTarjetaEstanteria(discos, row) {
+  const idx = allData.indexOf(row);
+  const el = document.getElementById(`estanteria-card-${idx}`);
+  if (!el) return;
+  const i = discos.indexOf(row);
+  el.outerHTML = tarjetaEstanteriaHTML(row, i, discos.length);
 }
 
 function verHuecoKallax(slot) {
