@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.39 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.40 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.39</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.40</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -5702,6 +5702,17 @@ function renderSesiones() {
 const tracklistCache = {};
 const coverFetchErrors = {}; // cleanId -> mensaje, para poder avisar en vez de dejarlo en "Cargando..." para siempre
 
+// Espaciado GLOBAL de peticiones a Discogs — compartido por TODA la app (Kallax, fichas
+// de disco sueltas, Cortador, etc.), no solo por quien esté cargando un lote grande. Antes
+// cada sitio se auto-limitaba por separado, así que si abrías una ficha mientras Kallax
+// cargaba de fondo, entre los dos se pasaban del límite de 60/min de Discogs igualmente.
+let discogsProximoInicio = 0;
+async function esperarTurnoDiscogs() {
+  const esperar = discogsProximoInicio - Date.now();
+  if (esperar > 0) await new Promise(res => setTimeout(res, esperar));
+  discogsProximoInicio = Date.now() + 1050; // ~57 peticiones/min como máximo, sea cual sea quien las pida
+}
+
 async function loadCoverForRow(row) {
   const releaseId = g(row, COL.release_id);
   if (!releaseId) return null;
@@ -5712,62 +5723,62 @@ async function loadCoverForRow(row) {
   // mirábamos coverCache, esta función se saltaba entera y la tracklist se quedaba sin
   // traer nunca (hasta recargar la página, que vacía los cachés y fuerza a traerlo todo).
   if (coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined) return coverCache[cleanId];
-  try {
-    const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: DISCOGS_HEADERS });
-    if (!res.ok) {
-      let motivo = `HTTP ${res.status}`;
-      try { motivo = (await res.json()).message || motivo; } catch(e) {}
-      throw new Error(motivo);
+
+  const intentosMax = 4;
+  for (let intento = 1; intento <= intentosMax; intento++) {
+    await esperarTurnoDiscogs();
+    try {
+      const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: DISCOGS_HEADERS });
+      if (!res.ok) {
+        let motivo = `HTTP ${res.status}`;
+        try { motivo = (await res.json()).message || motivo; } catch(e) {}
+        // Un 429 se reintenta unas cuantas veces con una espera extra creciente, en vez de
+        // rendirse a la primera — así la tarjeta llega a resolverse en esta misma visita en
+        // vez de quedarse con el spinner girando para siempre.
+        if (res.status === 429 && intento < intentosMax) {
+          await new Promise(resolve => setTimeout(resolve, 1500 * intento));
+          continue;
+        }
+        throw new Error(motivo);
+      }
+      const data = await res.json();
+      const images = data.images || [];
+      const primary = images.find(i => i.type === 'primary');
+      const img = (primary && primary.uri) || (images[0] && images[0].uri) || null;
+      coverCache[cleanId] = img;
+      tracklistCache[cleanId] = (data.tracklist || []).map(t => ({
+        position: t.position || '', title: t.title || '', duration: t.duration || ''
+      }));
+      delete coverFetchErrors[cleanId];
+      return img;
+    } catch(e) {
+      console.error('[loadCoverForRow] release', cleanId, 'intento', intento, e);
+      const esRateLimit = /429|too many requests/i.test(e.message || '');
+      if (esRateLimit && intento < intentosMax) {
+        await new Promise(resolve => setTimeout(resolve, 1500 * intento));
+        continue;
+      }
+      // Fallo real (404, release inválido...) se cachea como definitivo. Un 429 persistente
+      // tras varios intentos NO se cachea como definitivo, para que se reintente la próxima
+      // vez que se pida este disco — pero para ESTA vista ya dejamos de esperar y se muestra
+      // el icono de "sin carátula" en vez de un spinner eterno.
+      if (!esRateLimit) {
+        coverCache[cleanId] = null;
+        tracklistCache[cleanId] = null;
+      }
+      coverFetchErrors[cleanId] = e.message || 'Error desconocido';
+      return null;
     }
-    const data = await res.json();
-    const images = data.images || [];
-    const primary = images.find(i => i.type === 'primary');
-    const img = (primary && primary.uri) || (images[0] && images[0].uri) || null;
-    coverCache[cleanId] = img;
-    tracklistCache[cleanId] = (data.tracklist || []).map(t => ({
-      position: t.position || '', title: t.title || '', duration: t.duration || ''
-    }));
-    delete coverFetchErrors[cleanId];
-    return img;
-  } catch(e) {
-    console.error('[loadCoverForRow] release', cleanId, e);
-    // Un 429 (demasiadas peticiones) es temporal — si lo cacheamos como null se queda
-    // "sin carátula" para siempre en esta sesión, aunque Discogs sí la tenga. Solo cacheamos
-    // como definitivo un fallo real (404, release inválido, etc.), para que el 429 se reintente
-    // la próxima vez que se pida este disco.
-    const esRateLimit = /429|too many requests/i.test(e.message || '');
-    if (!esRateLimit) {
-      coverCache[cleanId] = null;
-      tracklistCache[cleanId] = null;
-    }
-    coverFetchErrors[cleanId] = e.message || 'Error desconocido';
-    return null;
   }
+  return null;
 }
 
-// Carga carátulas/tracklists de varios discos sin bombardear la API de Discogs — el límite
-// con token es 60 peticiones/minuto, y pedirlas todas de golpe con Promise.all provoca 429
-// en cadena (eso era el bug original de "no salen todas las carátulas" en Kallax).
-// Aquí se espacía el INICIO de cada petición nueva (no cacheada) cada minIntervalMs, pero se
-// dejan solapar sus respuestas — así la latencia de red no se suma al espaciado y no tarda
-// más de lo estrictamente necesario para respetar el límite. onEach(row) se llama en cuanto
-// cada disco termina (con o sin éxito) para poder pintar cada carátula según va llegando, en
-// vez de esperar a que terminen todas antes de mostrar nada.
-async function loadCoversThrottled(rows, { minIntervalMs = 1050, onEach } = {}) {
-  let proximoInicio = 0;
-  const pendientes = [];
-  for (const row of rows) {
-    const releaseId = g(row, COL.release_id);
-    const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
-    const yaEnCache = cleanId && coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined;
-    if (!yaEnCache) {
-      const esperar = proximoInicio - Date.now();
-      if (esperar > 0) await new Promise(res => setTimeout(res, esperar));
-      proximoInicio = Date.now() + minIntervalMs;
-    }
-    pendientes.push(loadCoverForRow(row).then(() => { if (onEach) onEach(row); }));
-  }
-  await Promise.all(pendientes);
+// Carga carátulas/tracklists de varios discos a la vez. El espaciado real con Discogs ya lo
+// hace loadCoverForRow de forma global (ver esperarTurnoDiscogs arriba), así que aquí solo
+// hace falta lanzarlas todas y avisar con onEach(row) según cada una va terminando (con o sin
+// éxito) — para poder pintar cada carátula en cuanto llega en vez de esperar a que acaben todas.
+async function loadCoversThrottled(rows, { onEach } = {}) {
+  await Promise.all(rows.map(row => loadCoverForRow(row).then(() => { if (onEach) onEach(row); })));
 }
 
 async function autoLoadCover(row) {
@@ -6488,11 +6499,11 @@ async function renderKallaxBrowser() {
   });
 }
 
-function tarjetaKallaxHTML(r) {
+function tarjetaKallaxHTML(r, forzarCargado) {
   const idx = allData.indexOf(r);
   const releaseId = g(r, COL.release_id);
   const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
-  const cargado = !cleanId || coverCache[cleanId] !== undefined;
+  const cargado = !cleanId || forzarCargado || coverCache[cleanId] !== undefined;
   const cover = cleanId ? coverCache[cleanId] : null;
   const tracklist = cleanId ? tracklistCache[cleanId] : null;
   const opcionesHueco = KALLAX_TODOS_HUECOS;
@@ -6526,7 +6537,10 @@ function pintarTarjetasKallaxHueco(discos) {
 function actualizarTarjetaKallax(idx) {
   const el = document.getElementById(`kallax-card-${idx}`);
   if (!el) return;
-  el.outerHTML = tarjetaKallaxHTML(allData[idx]);
+  // forzarCargado=true: si llegamos aquí es porque loadCoverForRow ya terminó de intentarlo
+  // (con éxito, con fallo real, o agotando reintentos de un 429) — así que ya no debe seguir
+  // mostrando spinner aunque el resultado no se haya cacheado como definitivo.
+  el.outerHTML = tarjetaKallaxHTML(allData[idx], true);
 }
 
 // Estantería de Paquillo: no tiene Kallax con huecos — es una única estantería
@@ -6559,11 +6573,11 @@ async function renderEstanteriaPaquillo() {
   });
 }
 
-function tarjetaEstanteriaHTML(r, i, total) {
+function tarjetaEstanteriaHTML(r, i, total, forzarCargado) {
   const idx = allData.indexOf(r);
   const releaseId = g(r, COL.release_id);
   const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
-  const cargado = !cleanId || coverCache[cleanId] !== undefined;
+  const cargado = !cleanId || forzarCargado || coverCache[cleanId] !== undefined;
   const cover = cleanId ? coverCache[cleanId] : null;
   const tracklist = cleanId ? tracklistCache[cleanId] : null;
   return `<div id="estanteria-card-${idx}" style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column">
@@ -6595,7 +6609,7 @@ function actualizarTarjetaEstanteria(discos, row) {
   const el = document.getElementById(`estanteria-card-${idx}`);
   if (!el) return;
   const i = discos.indexOf(row);
-  el.outerHTML = tarjetaEstanteriaHTML(row, i, discos.length);
+  el.outerHTML = tarjetaEstanteriaHTML(row, i, discos.length, true);
 }
 
 function verHuecoKallax(slot) {
