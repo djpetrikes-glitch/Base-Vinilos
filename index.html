@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.50 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.52 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.50</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.52</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -4569,6 +4569,7 @@ function renderView() {
   if (view === 'normalizados') { renderNormalizados(); return; }
   if (view === 'caratulasfaltantes') { renderCaratulasFaltantes(); return; }
   if (view === 'duplicados') { renderDuplicados(); return; }
+  if (view === 'masherramientas') { renderMasHerramientas(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
@@ -6995,21 +6996,27 @@ const SECTIONS = {
   ]},
   herramientas: { label: 'Herramientas', stamp: 'HR', views: [
     { id: 'nuevovinilo', label: 'Añadir vinilo', action: 'openModal', stamp: '+' },
-    { id: 'caratulas', label: 'Poner Carátulas', action: 'lanzarPonerCaratulas', stamp: 'PC' },
-    { id: 'buscador', label: '¿Tengo este tema?', stamp: '?' },
     { id: 'cortador', label: 'Edición de audio', stamp: 'EA' },
-    { id: 'auditoria', label: 'Verificar ripeados', stamp: 'VR' },
-    { id: 'auditoriadigital', label: 'Verificar digitales', stamp: 'VD' },
-    { id: 'explorador', label: 'Explorador', stamp: 'EX' },
-    { id: 'comparador', label: 'Comparador', stamp: 'CM' },
-    { id: 'normalizados', label: 'Normalizado', stamp: 'NZ' },
-    { id: 'caratulasfaltantes', label: 'Carátulas que faltan', stamp: 'CF' },
-    { id: 'duplicados', label: 'Posibles duplicados', stamp: 'DP' }
+    { id: 'caratulas', label: 'Poner Carátulas', action: 'lanzarPonerCaratulas', stamp: 'PC' },
+    { id: 'masherramientas', label: 'Más herramientas', stamp: '···' }
   ]},
   redes: { label: 'Redes Sociales', stamp: 'RS', construccion: true, views: [
     { id: 'sesiones', label: 'Sesiones YouTube', stamp: 'YT' }
   ]}
 };
+// El resto de herramientas — las menos usadas del día a día (comparadores, auditorías,
+// utilidades varias) — viven aparte de las 4 principales, detrás del cuadro "Más
+// herramientas", para no saturar la pantalla principal de Herramientas.
+const HERRAMIENTAS_EXTRA = [
+  { id: 'buscador', label: '¿Tengo este tema?', stamp: '?' },
+  { id: 'auditoria', label: 'Verificar ripeados', stamp: 'VR' },
+  { id: 'auditoriadigital', label: 'Verificar digitales', stamp: 'VD' },
+  { id: 'explorador', label: 'Explorador', stamp: 'EX' },
+  { id: 'comparador', label: 'Comparador', stamp: 'CM' },
+  { id: 'normalizados', label: 'Normalizado', stamp: 'NZ' },
+  { id: 'caratulasfaltantes', label: 'Carátulas que faltan', stamp: 'CF' },
+  { id: 'duplicados', label: 'Posibles duplicados', stamp: 'DP' }
+];
 const PERFIL_NOMBRES = { petrik: 'Dj Petrik', paquillo: 'Dj Paquillo', juntos: 'Los Dos Juntos' };
 
 function aplicarFondosPerfil() {
@@ -7085,11 +7092,12 @@ function renderTopMenu() {
   const accents = ['accent', 'blue', 'amber'];
   const items = Object.entries(SECTIONS);
   const cols = gridCols(items.length);
+  const anchoTile = `calc((100% - ${(cols - 1) * 20}px) / ${cols})`;
   document.getElementById('main-content').innerHTML = `
     <div class="tool-menu">
-      <div class="tool-menu-grid" style="grid-template-columns:repeat(${cols},1fr)">
+      <div class="tool-menu-grid" style="display:flex;flex-wrap:wrap;justify-content:center">
         ${items.map(([id, s], i) => `
-          <button class="tool-tile" data-accent="${accents[i % accents.length]}" onclick="setSeccion('${id}')">
+          <button class="tool-tile" style="flex:0 0 ${anchoTile}" data-accent="${accents[i % accents.length]}" onclick="setSeccion('${id}')">
             <div class="tile-stamp">${s.stamp}</div>
             <div class="tool-tile-name">${s.label}</div>
             ${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
@@ -7130,23 +7138,29 @@ function renderTabsL1() {
   `;
 }
 
-function renderSeccionMenu() {
-  const s = SECTIONS[seccion];
+// Pinta una cuadrícula de cuadros-botón como la de Colección/Herramientas — compartida entre
+// el menú normal de una sección y "Más herramientas" (que es la misma idea pero con una
+// lista de vistas aparte y un botón para volver). cabecera opcional: HTML de una cabecera
+// con "← Volver" por encima de la cuadrícula, para las pantallas que no son el menú raíz.
+function renderTileGrid(views, cabecera) {
   const accents = ['accent', 'blue', 'amber'];
-  const cols = gridCols(s.views.length);
+  const cols = gridCols(views.length);
+  const anchoTile = `calc((100% - ${(cols - 1) * 20}px) / ${cols})`;
   document.getElementById('main-content').innerHTML = `
+    ${cabecera || ''}
     <div class="tool-menu">
-      <div class="tool-menu-grid" style="grid-template-columns:repeat(${cols},1fr)">
-        ${s.views.map((v, i) => {
+      <div class="tool-menu-grid" style="display:flex;flex-wrap:wrap;justify-content:center">
+        ${views.map((v, i) => {
           const esCuadroKallax = v.id === 'kallax';
           const label = esCuadroKallax && perfil === 'paquillo' ? 'Estantería' : v.label;
           const stamp = esCuadroKallax && perfil === 'paquillo' ? 'ES' : v.stamp;
           return `
-          <button class="tool-tile" data-accent="${accents[i % accents.length]}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
+          <button class="tool-tile" style="flex:0 0 ${anchoTile}" data-accent="${accents[i % accents.length]}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
             ${TILE_BG_IMAGES[v.id] ? `<div class="tool-tile-bg" style="background-image:url(${TILE_BG_IMAGES[v.id]});filter:blur(${fotoBlur}px)"></div><div class="tool-tile-veil"></div>` : ''}
             <div class="tool-tile-content">
               <div class="tile-stamp">${stamp || '·'}</div>
               <div class="tool-tile-name">${label}</div>
+              ${v.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
             </div>
           </button>
         `;
@@ -7154,6 +7168,19 @@ function renderSeccionMenu() {
       </div>
     </div>
   `;
+}
+
+function renderSeccionMenu() {
+  renderTileGrid(SECTIONS[seccion].views);
+}
+
+function renderMasHerramientas() {
+  renderTileGrid(HERRAMIENTAS_EXTRA, `
+    <div class="content-header">
+      <button class="btn" style="font-size:11px" onclick="view=null;renderView()">← Volver a Herramientas</button>
+      <div style="font-weight:600;margin-left:10px">Más herramientas</div>
+    </div>
+  `);
 }
 
 function setSeccion(s) {
