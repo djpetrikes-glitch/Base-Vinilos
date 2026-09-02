@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.40 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.41 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.40</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.41</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -5702,6 +5702,26 @@ function renderSesiones() {
 const tracklistCache = {};
 const coverFetchErrors = {}; // cleanId -> mensaje, para poder avisar en vez de dejarlo en "Cargando..." para siempre
 
+// coverCache/tracklistCache vivían solo en memoria — al recargar la página se vaciaban y
+// tocaba volver a pedírselo TODO a Discogs desde cero, chocando otra vez con el límite de
+// 60/min. Aquí se guardan en localStorage (son solo URLs y texto, no las imágenes en sí, así
+// que ocupan poco) para que lo ya descargado quede para siempre entre sesiones.
+const COVER_CACHE_KEY = 'vinylbase_coverCache';
+const TRACKLIST_CACHE_KEY = 'vinylbase_tracklistCache';
+try { Object.assign(coverCache, JSON.parse(localStorage.getItem(COVER_CACHE_KEY) || '{}')); } catch(e) {}
+try { Object.assign(tracklistCache, JSON.parse(localStorage.getItem(TRACKLIST_CACHE_KEY) || '{}')); } catch(e) {}
+
+let guardarCacheCaratulasTimer = null;
+function guardarCacheCaratulas() {
+  // Debounce: si llegan varias carátulas seguidas no queremos reescribir todo el
+  // localStorage en cada una — se espera un pelín a que se calme el goteo.
+  clearTimeout(guardarCacheCaratulasTimer);
+  guardarCacheCaratulasTimer = setTimeout(() => {
+    try { localStorage.setItem(COVER_CACHE_KEY, JSON.stringify(coverCache)); } catch(e) { /* localStorage lleno o no disponible — sigue funcionando solo en memoria */ }
+    try { localStorage.setItem(TRACKLIST_CACHE_KEY, JSON.stringify(tracklistCache)); } catch(e) {}
+  }, 800);
+}
+
 // Espaciado GLOBAL de peticiones a Discogs — compartido por TODA la app (Kallax, fichas
 // de disco sueltas, Cortador, etc.), no solo por quien esté cargando un lote grande. Antes
 // cada sitio se auto-limitaba por separado, así que si abrías una ficha mientras Kallax
@@ -5750,6 +5770,7 @@ async function loadCoverForRow(row) {
         position: t.position || '', title: t.title || '', duration: t.duration || ''
       }));
       delete coverFetchErrors[cleanId];
+      guardarCacheCaratulas();
       return img;
     } catch(e) {
       console.error('[loadCoverForRow] release', cleanId, 'intento', intento, e);
@@ -5765,6 +5786,7 @@ async function loadCoverForRow(row) {
       if (!esRateLimit) {
         coverCache[cleanId] = null;
         tracklistCache[cleanId] = null;
+        guardarCacheCaratulas();
       }
       coverFetchErrors[cleanId] = e.message || 'Error desconocido';
       return null;
@@ -6169,6 +6191,7 @@ async function addRecord() {
 
   if (releaseIdLimpio && newRec.thumb) {
     coverCache[releaseIdLimpio] = newRec.thumb;
+    guardarCacheCaratulas();
   }
 
   await ponerEnColaParaSheet(row);
