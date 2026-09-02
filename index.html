@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.48 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.50 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.48</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.50</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -3671,6 +3671,114 @@ async function aplicarRevisarNormalizados(origenRelPath, nombreCarpeta, nombreAr
   }
 }
 
+// ─── CARÁTULAS QUE FALTAN ───────────────────────────────────────────────────────
+// Rellena de golpe las carátulas/tracklists de TODOS los vinilos (tuyos o de Paquillo, no
+// importa — el Sheet es de los dos) que tengan ID de Discogs pero todavía no tengan carátula
+// guardada. Reusa el mismo pipeline que ya carga carátulas al navegar (espaciado global,
+// reintentos, guardado en el Sheet) — la diferencia es que aquí se lanza para TODA la
+// colección de una vez, en vez de solo lo que vas viendo por pantalla.
+let rellenoCaratulasEnCurso = false;
+let rellenoCaratulasProgreso = { hechos: 0, total: 0 };
+
+function discosVinilosSinCaratula() {
+  return allData
+    .map((r, i) => i)
+    .filter(i => isVinyl(allData[i]) && g(allData[i], COL.release_id) && !g(allData[i], COL.caratula_url));
+}
+
+function renderCaratulasFaltantes() {
+  const idxs = discosVinilosSinCaratula();
+  document.getElementById('main-content').innerHTML = `
+    <div class="content-header"><div style="font-weight:600">🖼️ Carátulas que faltan</div></div>
+    <div style="padding:24px;max-width:560px">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+        ${idxs.length === 0
+          ? '✓ Todos los vinilos con ID de Discogs (tuyos y de Paquillo) ya tienen carátula guardada en el Sheet.'
+          : `Hay <b>${idxs.length}</b> vinilo${idxs.length === 1 ? '' : 's'} con ID de Discogs pero sin carátula guardada todavía en el Sheet.`}
+      </p>
+      ${idxs.length ? `
+      <button class="btn btn-accent" style="width:100%;justify-content:center" onclick="rellenarCaratulasFaltantes()" ${rellenoCaratulasEnCurso ? 'disabled' : ''}>
+        ${rellenoCaratulasEnCurso ? '⏳ Rellenando...' : '⬇️ Rellenar carátulas que faltan'}
+      </button>
+      <p id="progreso-caratulas-faltantes" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center">${rellenoCaratulasEnCurso ? `${rellenoCaratulasProgreso.hechos}/${rellenoCaratulasProgreso.total}` : ''}</p>
+      <p style="font-size:11px;color:var(--text3);margin-top:14px">Discogs limita a 60 peticiones/minuto (menos si tú y Paquillo compartís token todavía) — con muchas carátulas por rellenar, esto puede tardar bastante. Puedes irte a otra pantalla mientras corre, sigue en segundo plano; solo se para si cierras la pestaña. Cada carátula que consigue se guarda en el Sheet al momento, así que si lo cortas a medias no se pierde lo ya hecho.</p>
+      ` : ''}
+    </div>
+  `;
+}
+
+async function rellenarCaratulasFaltantes() {
+  if (rellenoCaratulasEnCurso) return;
+  const idxs = discosVinilosSinCaratula();
+  if (!idxs.length) return;
+  rellenoCaratulasEnCurso = true;
+  rellenoCaratulasProgreso = { hechos: 0, total: idxs.length };
+  renderView();
+
+  await loadCoversThrottled(idxs.map(i => allData[i]), {
+    onEach: () => {
+      rellenoCaratulasProgreso.hechos++;
+      if (view === 'caratulasfaltantes') {
+        const p = document.getElementById('progreso-caratulas-faltantes');
+        if (p) p.textContent = `${rellenoCaratulasProgreso.hechos}/${rellenoCaratulasProgreso.total}`;
+      }
+    }
+  });
+
+  rellenoCaratulasEnCurso = false;
+  showToast(`✓ Carátulas rellenadas — ${rellenoCaratulasProgreso.hechos} discos procesados`);
+  if (view === 'caratulasfaltantes') renderView();
+}
+
+// ─── POSIBLES DUPLICADOS ─────────────────────────────────────────────────────
+// Agrupa filas que comparten artista+título (sin mayúsculas ni espacios de más) — el mismo
+// tipo de coincidencia que usaba de red de seguridad tu Apps Script (encontrarFila) y que,
+// antes de arreglarlo, podía hacer que una fila "robara" ediciones destinadas a otra. Sirve
+// para encontrar y limpiar de una sentada todos los casos como el de XinoDJ/Troll.
+function gruposDuplicados() {
+  const porClave = {};
+  allData.forEach((r, i) => {
+    const artist = g(r, COL.artist).toLowerCase();
+    const title = g(r, COL.title).toLowerCase();
+    if (!artist || !title) return; // sin artista o título no hay nada fiable que agrupar
+    const clave = artist + '|' + title;
+    (porClave[clave] = porClave[clave] || []).push(i);
+  });
+  return Object.values(porClave).filter(idxs => idxs.length > 1);
+}
+
+function renderDuplicados() {
+  const grupos = gruposDuplicados();
+  document.getElementById('main-content').innerHTML = `
+    <div class="content-header"><div style="font-weight:600">🔍 Posibles duplicados — ${grupos.length} grupo${grupos.length === 1 ? '' : 's'}</div></div>
+    <div style="padding:16px;overflow-y:auto;flex:1">
+      ${grupos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">No hay ningún par de filas que compartan artista+título exactos.</p>` : `
+      <p style="font-size:12px;color:var(--text2);margin-bottom:16px;max-width:700px">Filas que comparten artista y título — puede ser un duplicado de verdad, o dos ediciones/pressings distintos que legítimamente se llaman igual. Revisa cada grupo antes de borrar nada.</p>
+      <div style="display:flex;flex-direction:column;gap:14px;max-width:900px">
+      ${grupos.map(idxs => `
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg2)">
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px">${g(allData[idxs[0]], COL.artist)} — ${g(allData[idxs[0]], COL.title)}</div>
+          ${idxs.map(idx => {
+            const r = allData[idx];
+            const tieneId = !!g(r, COL.release_id);
+            return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px dashed var(--border);flex-wrap:wrap">
+              <div style="flex:1;min-width:220px;font-size:11px;color:var(--text2)">
+                Fila ${idx + 2} del Sheet · ${tieneId ? `ID Discogs ${g(r, COL.release_id)}` : '<span style="color:var(--red)">sin ID de Discogs</span>'} · Catálogo: ${g(r, COL.catalog) || '—'} · Fuente: ${g(r, COL.fuente) || '—'}
+                · ${isVinyl(r) ? 'Vinilo' : 'No vinilo'}${isDigital(r) ? ' + digital' : ''} · ${g(r, COL.ripeado).toLowerCase().startsWith('s') ? 'Ripeado' : 'Sin ripear'}${g(r, COL.kallax_slot) ? ' · Hueco ' + g(r, COL.kallax_slot) : ''}${g(r, COL.propietario) ? ' · ' + g(r, COL.propietario) : ''}
+              </div>
+              <button class="btn" style="font-size:11px" onclick="abrirDiscoDesdeKallax(${idx})">Ver ficha</button>
+              ${tieneId
+                ? `<button class="btn" style="font-size:11px;color:var(--red)" onclick="borrarDiscoDesdeFicha(${idx})">🗑 Borrar esta fila</button>`
+                : `<span style="font-size:10px;color:var(--text3)" title="Sin ID de Discogs no se puede identificar con seguridad cuál de las filas duplicadas es — bórrala directamente en el Sheet (fila ${idx + 2}) si estás seguro">🗑 bórrala a mano en el Sheet</span>`}
+            </div>`;
+          }).join('')}
+        </div>
+      `).join('')}
+      </div>`}
+    </div>
+  `;
+}
+
 function renderNormalizados() {
   const main = document.getElementById('main-content');
   main.innerHTML = `
@@ -4459,6 +4567,8 @@ function renderView() {
   if (view === 'explorador') { renderExplorador(); return; }
   if (view === 'comparador') { renderComparador(); return; }
   if (view === 'normalizados') { renderNormalizados(); return; }
+  if (view === 'caratulasfaltantes') { renderCaratulasFaltantes(); return; }
+  if (view === 'duplicados') { renderDuplicados(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
@@ -6892,7 +7002,9 @@ const SECTIONS = {
     { id: 'auditoriadigital', label: 'Verificar digitales', stamp: 'VD' },
     { id: 'explorador', label: 'Explorador', stamp: 'EX' },
     { id: 'comparador', label: 'Comparador', stamp: 'CM' },
-    { id: 'normalizados', label: 'Normalizado', stamp: 'NZ' }
+    { id: 'normalizados', label: 'Normalizado', stamp: 'NZ' },
+    { id: 'caratulasfaltantes', label: 'Carátulas que faltan', stamp: 'CF' },
+    { id: 'duplicados', label: 'Posibles duplicados', stamp: 'DP' }
   ]},
   redes: { label: 'Redes Sociales', stamp: 'RS', construccion: true, views: [
     { id: 'sesiones', label: 'Sesiones YouTube', stamp: 'YT' }
