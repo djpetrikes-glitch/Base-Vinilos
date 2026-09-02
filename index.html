@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.22 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.29 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.22</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.29</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -4406,6 +4406,7 @@ function renderView() {
   if (view === 'config') { renderConfig(); return; }
   if (view === 'sesiones') { renderSesiones(); return; }
   if (view === 'temasjuntos') { renderTemasJuntos(); return; }
+  if (view === 'kallax') { renderKallaxBrowser(); return; }
   if (view === 'buscador') { renderBuscador(); return; }
   if (view === 'cortador') { renderCortador(); return; }
   if (view === 'auditoria') { renderAuditoria(); return; }
@@ -4744,11 +4745,14 @@ function renderDetail(row) {
       </div>
       ${isVinyl(row) ? `<button class="btn" style="font-size:11px;color:var(--red);margin-top:6px" onclick="reclasificarComoDigital(${allData.indexOf(row)})" title="Para discos que en realidad nunca fueron vinilo — se metieron en Discogs como si lo fueran hace tiempo">🔁 Esto no era vinilo de verdad — reclasificar a digital</button>` : ''}
 
+      ${isVinyl(row) ? `
       <div class="d-section">Ubicación Kallax</div>
       <button class="btn btn-accent" style="width:100%;justify-content:center;margin-bottom:8px" onclick="colocarKallaxAutomatico(${allData.indexOf(row)})" title="Calcula el hueco que le toca por orden de catálogo, y qué otros discos hay que mover para hacerle sitio">
         📐 Colocar automáticamente por catálogo
       </button>
+      ${g(row, COL.kallax_slot) ? `<button class="btn" style="width:100%;justify-content:center;margin-bottom:8px;font-size:11px" onclick="setKallaxSlot(${allData.indexOf(row)}, '')">✕ Quitar de Kallax</button>` : ''}
       ${renderKallax(g(row, COL.kallax_slot), 'setKallaxSlot.bind(null,' + allData.indexOf(row) + ')')}
+      ` : ''}
 
       <div class="d-section">Carátula</div>
       <div class="cover-btns">
@@ -4904,10 +4908,12 @@ function renderConfig() {
       <div class="config-section">
         <h3>Estanterías Kallax</h3>
         <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Cuántos huecos hay activos ahora mismo (los que se usan para colocar automáticamente por catálogo) y cuántos discos caben en cada uno.</p>
-        <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
           <div class="field-g"><label>Huecos activos</label><input type="number" min="1" value="${kallaxConfig.numHuecos}" style="width:80px" onchange="kallaxConfig.numHuecos=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
           <div class="field-g"><label>Discos por hueco</label><input type="number" min="1" value="${kallaxConfig.porHueco}" style="width:80px" onchange="kallaxConfig.porHueco=parseInt(this.value,10)||1; guardarKallaxConfig();"></div>
         </div>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:8px;font-size:11px" onclick="limpiarKallaxDeDigitales()" title="Quita el hueco de Kallax a cualquier disco que no sea vinilo físico">🧹 Quitar Kallax de los digitales (por si alguno se coló)</button>
+        <p style="font-size:11px;color:var(--text3)">Para renombrar un hueco concreto: entra en Colección → Kallax → "✏️ Renombrar huecos", y pincha el que esté mal numerado.</p>
       </div>
       <div class="config-section">
         <h3>Fotos de fondo</h3>
@@ -6317,6 +6323,121 @@ async function colocarKallaxAutomatico(idx) {
   showToast(`✓ Colocación actualizada — ${moves.length} disco(s) movidos`);
 }
 
+// Hueco actualmente abierto en el explorador de Kallax (null = mostrando la cuadrícula)
+let kallaxHuecoActivo = null;
+// Modo renombrar: al activarlo, pinchar un hueco pregunta a qué número debería
+// llamarse de verdad, en vez de abrir su lista de discos.
+let kallaxModoRenombrar = false;
+
+function toggleModoRenombrarKallax() {
+  kallaxModoRenombrar = !kallaxModoRenombrar;
+  renderView();
+}
+
+async function renderKallaxBrowser() {
+  if (kallaxHuecoActivo == null) {
+    document.getElementById('main-content').innerHTML = `
+      <div class="content-header" style="display:flex;align-items:center;gap:10px">
+        <div style="font-weight:600">🗄️ Kallax</div>
+        <button class="btn ${kallaxModoRenombrar ? 'btn-accent' : ''}" style="font-size:11px;margin-left:auto" onclick="toggleModoRenombrarKallax()">✏️ ${kallaxModoRenombrar ? 'Renombrando huecos (pincha uno)' : 'Renombrar huecos'}</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:24px">
+        <div style="max-width:560px;width:100%;margin:0 auto">
+          <p style="font-size:12px;color:var(--text2);margin-bottom:14px;text-align:center">${kallaxModoRenombrar ? 'Pincha el hueco que está mal numerado y te pregunto cuál es el número correcto.' : 'Pincha un hueco para ver qué discos tienes ahí.'}</p>
+          ${renderKallax(null, kallaxModoRenombrar ? 'iniciarRenombreHueco' : 'verHuecoKallax')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+  const slot = kallaxHuecoActivo;
+  const discos = allData.filter(r => String(g(r, COL.kallax_slot)) === String(slot))
+    .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
+
+  document.getElementById('main-content').innerHTML = `
+    <div class="content-header" style="display:flex;align-items:center;gap:10px">
+      <button class="btn" style="font-size:11px" onclick="kallaxHuecoActivo=null;renderView()">← Volver a Kallax</button>
+      <div style="font-weight:600">🗄️ Hueco ${slot} — ${discos.length}/${kallaxConfig.porHueco} discos</div>
+    </div>
+    <div id="kallax-hueco-cards" style="padding:16px;overflow-y:auto;flex:1">
+      ${discos.length === 0 ? `<p style="font-size:13px;color:var(--text3)">Este hueco está vacío.</p>` : `<div class="state-center"><div class="spinner"></div><p>Cargando carátulas y canciones...</p></div>`}
+    </div>
+  `;
+  if (!discos.length) return;
+
+  await Promise.all(discos.map(loadCoverForRow));
+  // Puede que mientras cargaba se haya cambiado de hueco o de vista — no pintar encima de otra cosa
+  if (kallaxHuecoActivo !== slot || view !== 'kallax') return;
+  pintarTarjetasKallaxHueco(discos);
+}
+
+function pintarTarjetasKallaxHueco(discos) {
+  const cont = document.getElementById('kallax-hueco-cards');
+  if (!cont) return;
+  const opcionesHueco = Array.from({ length: kallaxConfig.numHuecos }, (_, i) => i + 1);
+  cont.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px">
+    ${discos.map(r => {
+      const idx = allData.indexOf(r);
+      const releaseId = g(r, COL.release_id);
+      const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+      const cover = cleanId ? coverCache[cleanId] : undefined;
+      const tracklist = cleanId ? tracklistCache[cleanId] : undefined;
+      return `<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg2);display:flex;flex-direction:column">
+        <div style="width:100%;aspect-ratio:1;background:var(--bg3);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">
+          ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text3)"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
+        </div>
+        <div style="padding:10px">
+          <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer" onclick="abrirDiscoDesdeKallax(${idx})">${g(r,COL.artist)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.title)}</div>
+          ${kallaxBadge(r)}
+          <div style="margin-top:6px;max-height:120px;overflow-y:auto">
+            ${tracklist === undefined ? `<div style="font-size:10px;color:var(--text3)">Cargando canciones...</div>` : (!tracklist || tracklist.length === 0) ? `<div style="font-size:10px;color:var(--text3)">Sin tracklist en Discogs</div>` : tracklist.map(t => `<div style="font-size:10.5px;padding:2px 0;border-bottom:1px dashed var(--border)">${t.position ? t.position + ' — ' : ''}${t.title}</div>`).join('')}
+          </div>
+          <select onchange="setKallaxSlot(${idx}, this.value)" style="width:100%;margin-top:8px;font-size:11px;padding:5px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)" title="Mover este disco a otro hueco, o quitarlo de Kallax">
+            <option value="">— Quitar de Kallax —</option>
+            ${opcionesHueco.map(n => `<option value="${n}" ${String(n) === String(g(r, COL.kallax_slot)) ? 'selected' : ''}>Hueco ${n}</option>`).join('')}
+          </select>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function verHuecoKallax(slot) {
+  kallaxHuecoActivo = slot;
+  renderView();
+}
+
+// Abre la ficha de un disco desde el explorador de Kallax, igual que al pinchar en Vinilos
+function abrirDiscoDesdeKallax(idx) {
+  if (seccion !== 'coleccion') { seccion = 'coleccion'; localStorage.setItem('vinylbase_seccion', seccion); }
+  setView('vinilos');
+  selectRow(idx);
+}
+
+// Renombra UN hueco a mano — se lo preguntamos a él directamente, sin mapas
+// adivinados a partir de una foto.
+async function iniciarRenombreHueco(slotViejo) {
+  const nuevo = prompt(`Hueco ${slotViejo} — ¿qué número le corresponde de verdad?`, slotViejo);
+  if (nuevo == null) return;
+  const nuevoNum = nuevo.trim();
+  if (!nuevoNum || nuevoNum === String(slotViejo)) return;
+
+  const cambios = allData.filter(r => String(g(r, COL.kallax_slot)) === String(slotViejo));
+  if (!cambios.length) { showToast(`El hueco ${slotViejo} está vacío — nada que renombrar`); return; }
+  if (!confirm(`El hueco ${slotViejo} (${cambios.length} discos) pasará a llamarse ${nuevoNum}.\n\n¿Seguro?`)) return;
+
+  showToast(`Renombrando ${cambios.length} discos del hueco ${slotViejo} → ${nuevoNum}...`);
+  for (const r of cambios) {
+    r[COL.kallax_slot] = nuevoNum;
+    try { await postToSheet(r, [{ col: COL.kallax_slot, value: nuevoNum }]); } catch(e) {}
+    await new Promise(res => setTimeout(res, 120));
+  }
+  showToast(`✓ Hueco ${slotViejo} renombrado a ${nuevoNum} (${cambios.length} discos)`);
+  renderStats();
+  renderView();
+}
+
 function renderKallax(selectedSlot, onSelect) {
   // Contar cuántos discos hay ya en cada hueco (no solo si está ocupado o no)
   const counts = {};
@@ -6351,11 +6472,29 @@ function renderKallax(selectedSlot, onSelect) {
   </div>`;
 }
 
+// Por si algún digital se coló en Kallax antes de que existiera esta comprobación
+// (no debería volver a pasar, pero esto limpia lo que ya se hubiera colado).
+async function limpiarKallaxDeDigitales() {
+  const afectados = allData.filter(r => !isVinyl(r) && g(r, COL.kallax_slot));
+  if (!afectados.length) { showToast('No hay ningún digital con hueco de Kallax puesto'); return; }
+  if (!confirm(`${afectados.length} disco(s) marcados como digital tienen un hueco de Kallax puesto (no puede ser, físicamente). ¿Los quito?`)) return;
+  showToast(`Quitando Kallax de ${afectados.length} discos...`);
+  for (const r of afectados) {
+    r[COL.kallax_slot] = '';
+    try { await postToSheet(r, [{ col: COL.kallax_slot, value: '' }]); } catch(e) {}
+    await new Promise(res => setTimeout(res, 150));
+  }
+  showToast(`✓ Kallax quitado de ${afectados.length} discos`);
+  renderStats();
+  renderView();
+}
+
 function setKallaxSlot(idx, slot) {
-  allData[idx][COL.kallax_slot] = String(slot);
+  const val = (slot === '' || slot == null) ? '' : String(slot);
+  allData[idx][COL.kallax_slot] = val;
   selectedRow = allData[idx];
   renderView();
-  showToast('\u2713 Ubicado en hueco ' + slot);
+  showToast(val ? '✓ Ubicado en hueco ' + val : '✓ Quitado de Kallax');
   saveToSheet(idx);
 }
 
@@ -6384,7 +6523,8 @@ const SECTIONS = {
   coleccion: { label: 'Colección', stamp: 'CL', views: [
     { id: 'vinilos', label: 'Vinilos', stamp: 'VN' },
     { id: 'digital', label: 'Digitales', stamp: 'DG' },
-    { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' }
+    { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' },
+    { id: 'kallax', label: 'Kallax', stamp: 'KX' }
   ]},
   herramientas: { label: 'Herramientas', stamp: 'HR', views: [
     { id: 'nuevovinilo', label: 'Añadir vinilo', action: 'openModal', stamp: '+' },
@@ -6491,11 +6631,33 @@ function renderTopMenu() {
 
 function renderTabsL1() {
   const el = document.getElementById('tabs-l1');
-  const center = Object.entries(SECTIONS).map(([id, s]) => `
-    <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
-      <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
-    </button>
-  `).join('');
+  let center = '';
+  if (!seccion) {
+    // Nivel 1 (el menú grande de Colección/Herramientas/Redes): a esto se llegó
+    // eligiendo perfil, así que arriba van los perfiles.
+    center = Object.entries(PERFIL_NOMBRES).map(([id, nombre]) => `
+      <button class="vb-tab-l1 ${perfil === id ? 'active' : ''}" onclick="selectPerfil('${id}')">
+        <span class="dot"></span>${nombre}
+      </button>
+    `).join('');
+  } else if (!view) {
+    // Nivel 2 (el menú de cuadrados de una sección): a esto se llegó desde el
+    // menú superior, así que arriba van Colección/Herramientas/Redes Sociales.
+    center = Object.entries(SECTIONS).map(([id, s]) => `
+      <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
+        <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
+      </button>
+    `).join('');
+  } else {
+    // Nivel 3 (dentro de una vista/herramienta concreta): a esto se llegó desde
+    // el menú de su sección, así que arriba van los cuadrados de esa sección.
+    const s = SECTIONS[seccion];
+    center = s.views.map(v => `
+      <button class="vb-tab-l1 ${view === v.id ? 'active' : ''}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
+        <span class="dot"></span>${v.label}
+      </button>
+    `).join('');
+  }
   el.innerHTML = `
     <div class="vb-tabs-l1-side"></div>
     <div class="vb-tabs-l1-center">${center}</div>
