@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.57 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.59 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.57</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.59</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -3705,8 +3705,31 @@ function discosVinilosSinCaratula() {
     .filter(i => isVinyl(allData[i]) && g(allData[i], COL.release_id) && !g(allData[i], COL.caratula_url));
 }
 
+// Distinto de "sin carátula": esto son discos que ni siquiera tienen ID de Discogs — no hay
+// nada que pedirle a Discogs, así que "Rellenar carátulas que faltan" nunca los va a tocar
+// por mucho que se ejecute. Se quedan con el icono de disco en Kallax para siempre hasta que
+// se vinculen a mano a un release de Discogs (desde la ficha del disco, "Buscar en Discogs").
+function discosVinilosSinIdDiscogs() {
+  return allData
+    .map((r, i) => i)
+    .filter(i => isVinyl(allData[i]) && !g(allData[i], COL.release_id));
+}
+
+// Discos marcados "NINGUNA" (sin carátula, definitivo) — hasta la v3.58 esto se marcaba así
+// ante CUALQUIER fallo, no solo un 404 real, así que hay discos aquí que sí tienen carátula
+// de verdad en Discogs y solo tropezaron con un error puntual. Este grupo es rescatable:
+// limpiando la marca y volviendo a pedirlos ahora (con el fallo corregido) deberían salir bien.
+function discosMarcadosSinCaratula() {
+  return allData
+    .map((r, i) => i)
+    .filter(i => isVinyl(allData[i]) && g(allData[i], COL.release_id) && g(allData[i], COL.caratula_url) === 'NINGUNA');
+}
+
 function renderCaratulasFaltantes() {
   const idxs = discosVinilosSinCaratula();
+  const sinId = discosVinilosSinIdDiscogs();
+  const sinIdEnKallax = sinId.filter(i => g(allData[i], COL.kallax_slot)).length;
+  const marcadosSin = discosMarcadosSinCaratula();
   document.getElementById('main-content').innerHTML = `
     <div class="content-header"><div style="font-weight:600">🖼️ Carátulas que faltan</div></div>
     <div style="padding:24px;max-width:560px">
@@ -3722,8 +3745,65 @@ function renderCaratulasFaltantes() {
       <p id="progreso-caratulas-faltantes" style="font-size:12px;color:var(--text3);margin-top:10px;text-align:center">${rellenoCaratulasEnCurso ? `${rellenoCaratulasProgreso.hechos}/${rellenoCaratulasProgreso.total}` : ''}</p>
       <p style="font-size:11px;color:var(--text3);margin-top:14px">Discogs limita a 60 peticiones/minuto (menos si tú y Paquillo compartís token todavía) — con muchas carátulas por rellenar, esto puede tardar bastante. Puedes irte a otra pantalla mientras corre, sigue en segundo plano; solo se para si cierras la pestaña. Cada carátula que consigue se guarda en el Sheet al momento, así que si lo cortas a medias no se pierde lo ya hecho.</p>
       ` : ''}
+      ${marcadosSin.length ? `
+      <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:10px">
+          ⚠️ Hasta hace un momento había un fallo que marcaba un disco como "sin carátula" ante
+          cualquier error, no solo cuando de verdad no existe en Discogs. Hay <b>${marcadosSin.length}</b>
+          disco${marcadosSin.length === 1 ? '' : 's'} marcado${marcadosSin.length === 1 ? '' : 's'} así que
+          merece la pena volver a intentar — puede que sí tengan carátula de verdad.
+        </p>
+        <button class="btn" style="width:100%;justify-content:center" onclick="reintentarMarcadosSinCaratula()" ${rellenoCaratulasEnCurso ? 'disabled' : ''}>
+          🔁 Reintentar los ${marcadosSin.length} marcados como "sin carátula"
+        </button>
+      </div>` : ''}
+      ${sinId.length ? `
+      <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+        <p style="font-size:13px;color:var(--text2)">
+          Aparte de eso, hay <b>${sinId.length}</b> vinilo${sinId.length === 1 ? '' : 's'} que ni siquiera tiene ID de Discogs
+          ${sinIdEnKallax ? ` (<b>${sinIdEnKallax}</b> de ellos con hueco de Kallax asignado)` : ''} —
+          a estos "Rellenar carátulas que faltan" nunca les va a poder traer carátula, no hay nada que pedirle a Discogs.
+          Se quedan con el icono de disco hasta que entres en cada ficha y lo vincules a mano con "Buscar en Discogs".
+        </p>
+      </div>` : ''}
     </div>
   `;
+}
+
+async function reintentarMarcadosSinCaratula() {
+  if (rellenoCaratulasEnCurso) return;
+  const idxs = discosMarcadosSinCaratula();
+  if (!idxs.length) return;
+  // Limpiar la marca de todos antes de volver a pedirlos — si no, loadCoverForRow los
+  // tratará como "ya resueltos" (caratula_url='NINGUNA' cuenta como guardado) y ni lo intenta.
+  idxs.forEach(i => {
+    const r = allData[i];
+    const releaseId = g(r, COL.release_id);
+    const cleanId = releaseId.toString().slice(0, -1);
+    delete coverCache[cleanId];
+    delete tracklistCache[cleanId];
+    r[COL.caratula_url] = '';
+    r[COL.tracklist_json] = '';
+  });
+  guardarCacheCaratulas();
+
+  rellenoCaratulasEnCurso = true;
+  rellenoCaratulasProgreso = { hechos: 0, total: idxs.length };
+  renderView();
+
+  await loadCoversThrottled(idxs.map(i => allData[i]), {
+    onEach: () => {
+      rellenoCaratulasProgreso.hechos++;
+      if (view === 'caratulasfaltantes') {
+        const p = document.getElementById('progreso-caratulas-faltantes');
+        if (p) p.textContent = `${rellenoCaratulasProgreso.hechos}/${rellenoCaratulasProgreso.total}`;
+      }
+    }
+  });
+
+  rellenoCaratulasEnCurso = false;
+  showToast(`✓ Reintento terminado — ${rellenoCaratulasProgreso.hechos} discos procesados`);
+  if (view === 'caratulasfaltantes') renderView();
 }
 
 async function rellenarCaratulasFaltantes() {
@@ -4796,6 +4876,7 @@ function renderDetail(row) {
                 ? `<div class="detail-cover-ph">
                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
                      <span style="font-size:11px">Sin carátula disponible</span>
+                     <button class="btn" style="font-size:10px;margin-top:6px" onclick="reintentarCaratula(${allData.indexOf(row)})">🔁 Reintentar</button>
                    </div>`
                 : `<img id="detail-cover-img" src="" style="display:none;width:100%;height:100%;object-fit:cover">
                    <div class="detail-cover-ph" id="cover-ph">
@@ -5967,14 +6048,17 @@ async function loadCoverForRow(row) {
       if (!res.ok) {
         let motivo = `HTTP ${res.status}`;
         try { motivo = (await res.json()).message || motivo; } catch(e) {}
-        // Un 429 se reintenta con una espera propia creciente (tope 8s), en vez de rendirse
-        // pronto — así la tarjeta llega a resolverse en esta misma visita en vez de quedarse
-        // con el spinner girando para siempre.
-        if (res.status === 429 && intento < intentosMax) {
+        // Solo un 404 de verdad (Discogs dice que el release no existe) es un fallo
+        // definitivo. Cualquier otra cosa — 429 (límite), 500/502/503 (Discogs con un hipo
+        // puntual, algo normal cuando se lanzan cientos de peticiones seguidas), lo que sea —
+        // es temporal y se reintenta, en vez de darlo por perdido para siempre a la primera.
+        if (res.status !== 404 && intento < intentosMax) {
           await new Promise(resolve => setTimeout(resolve, Math.min(1500 * intento, 8000)));
           continue;
         }
-        throw new Error(motivo);
+        const err = new Error(motivo);
+        err.definitivo = (res.status === 404);
+        throw err;
       }
       const data = await res.json();
       const images = data.images || [];
@@ -5990,16 +6074,18 @@ async function loadCoverForRow(row) {
       return img;
     } catch(e) {
       console.error('[loadCoverForRow] release', cleanId, 'intento', intento, e);
-      const esRateLimit = /429|too many requests/i.test(e.message || '');
-      if (esRateLimit && intento < intentosMax) {
+      // e.definitivo solo es true en un 404 confirmado. Cualquier otra excepción (fallo de
+      // red, timeout, un error que no venga de la respuesta de Discogs) se trata igual que
+      // antes de un 429: temporal, se reintenta si quedan intentos.
+      if (!e.definitivo && intento < intentosMax) {
         await new Promise(resolve => setTimeout(resolve, Math.min(1500 * intento, 8000)));
         continue;
       }
-      // Fallo real (404, release inválido...) se cachea como definitivo. Un 429 persistente
-      // tras varios intentos NO se cachea como definitivo, para que se reintente la próxima
-      // vez que se pida este disco — pero para ESTA vista ya dejamos de esperar y se muestra
-      // el icono de "sin carátula" en vez de un spinner eterno.
-      if (!esRateLimit) {
+      // Solo se cachea como definitivo un 404 real. Cualquier otro fallo persistente tras
+      // agotar los intentos se deja SIN cachear, para que se reintente la próxima vez que se
+      // pida este disco — pero para ESTA vista ya dejamos de esperar y se muestra el icono de
+      // "sin carátula" en vez de un spinner eterno.
+      if (e.definitivo) {
         coverCache[cleanId] = null;
         tracklistCache[cleanId] = null;
         guardarCacheCaratulas();
@@ -6029,6 +6115,23 @@ async function autoLoadCover(row) {
 function selectRow(idx) {
   selectedRow = allData[idx];
   renderView();
+}
+
+// Limpia el fallo guardado de un disco (por si se marcó mal, como pasaba con el bug de los
+// errores que no eran 404 real) y lo vuelve a pedir a Discogs desde cero.
+async function reintentarCaratula(idx) {
+  const row = allData[idx];
+  const releaseId = g(row, COL.release_id);
+  if (!releaseId) return;
+  const cleanId = releaseId.toString().slice(0, -1);
+  delete coverCache[cleanId];
+  delete tracklistCache[cleanId];
+  guardarCacheCaratulas();
+  row[COL.caratula_url] = '';
+  row[COL.tracklist_json] = '';
+  showToast('Reintentando...');
+  await loadCoverForRow(row);
+  if (selectedRow === row) renderView();
 }
 
 function toggleSort(col) {
