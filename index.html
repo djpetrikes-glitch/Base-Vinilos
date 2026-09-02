@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.59 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.60 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.59</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.60</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -1320,7 +1320,7 @@ async function embedTagsInWav(wavArrayBuffer, expTrack) {
     if (releaseId) {
       const cleanId = releaseId.toString().slice(0, -1);
       frames.push(id3TxxxFrame('DISCOGS_RELEASE_ID', cleanId)); // el mismo que usa Mp3tag, ya limpio para la API
-      await loadCoverForRow(row); // asegura que coverCache tiene la URL de este disco
+      await loadCoverForRow(row, true); // asegura que coverCache tiene la URL de este disco
       const cover = await getCoverBytes(cleanId);
       if (cover) frames.push(id3ApicFrame(cover.mime, cover.bytes));
     }
@@ -1436,7 +1436,7 @@ async function embedTagsInFlac(flacArrayBuffer, expTrack) {
     if (releaseId) {
       const cleanId = releaseId.toString().slice(0, -1);
       pairs.push(['DISCOGS_RELEASE_ID', cleanId]);
-      await loadCoverForRow(row);
+      await loadCoverForRow(row, true);
       const cover = await getCoverBytes(cleanId);
       if (cover) coverBody = buildFlacPictureBody(cover.mime, cover.bytes);
     }
@@ -5802,7 +5802,7 @@ async function addCortadorSessionDisc(idx) {
   guardarProgresoCortador();
   renderCortador();
   requestAnimationFrame(() => { document.getElementById('cortador-disc-search')?.focus(); }); // que puedas seguir escribiendo el siguiente sin volver a hacer clic
-  await loadCoverForRow(row); // esto ya trae y cachea el tracklist con duraciones
+  await loadCoverForRow(row, true); // esto ya trae y cachea el tracklist con duraciones
   renderCortador();
   requestAnimationFrame(() => { document.getElementById('cortador-disc-search')?.focus(); });
 }
@@ -5985,8 +5985,21 @@ function guardarCacheCaratulas() {
 // de disco sueltas, Cortador, etc.), no solo por quien esté cargando un lote grande. Antes
 // cada sitio se auto-limitaba por separado, así que si abrías una ficha mientras Kallax
 // cargaba de fondo, entre los dos se pasaban del límite de 60/min de Discogs igualmente.
+//
+// prioritario=true es para acciones que el usuario está esperando ver AHORA (añadir un
+// disco en el Cortador, reintentar una carátula a mano) — nunca deben hacer cola detrás de
+// un lote grande en segundo plano ("Rellenar carátulas que faltan" puede tardar varios
+// minutos con cientos de discos). Se cuelan al siguiente hueco libre, esperando como mucho
+// ~1 turno (1050ms) en vez de la cola entera acumulada por el lote — el lote de fondo solo
+// se retrasa ese único turno, nada perceptible en un proceso que ya dura minutos.
 let discogsProximoInicio = 0;
-async function esperarTurnoDiscogs() {
+async function esperarTurnoDiscogs(prioritario) {
+  if (prioritario) {
+    const esperar = Math.min(Math.max(0, discogsProximoInicio - Date.now()), 1050);
+    if (esperar > 0) await new Promise(res => setTimeout(res, esperar));
+    discogsProximoInicio = Math.max(discogsProximoInicio, Date.now()) + 1050;
+    return;
+  }
   const esperar = discogsProximoInicio - Date.now();
   if (esperar > 0) await new Promise(res => setTimeout(res, esperar));
   discogsProximoInicio = Date.now() + 1050; // ~57 peticiones/min como máximo, sea cual sea quien las pida
@@ -6007,7 +6020,7 @@ function guardarCaratulaEnSheet(row, img, tracklist) {
   ]).catch(e => console.error('[guardarCaratulaEnSheet]', e));
 }
 
-async function loadCoverForRow(row) {
+async function loadCoverForRow(row, prioritario) {
   const releaseId = g(row, COL.release_id);
   if (!releaseId) return null;
   // Quitar último dígito del release_id (formato del Sheet tiene un 0 extra)
@@ -6042,7 +6055,7 @@ async function loadCoverForRow(row) {
   // vistos) 4 intentos se quedaban cortos.
   const intentosMax = 8;
   for (let intento = 1; intento <= intentosMax; intento++) {
-    if (intento === 1) await esperarTurnoDiscogs();
+    if (intento === 1) await esperarTurnoDiscogs(prioritario);
     try {
       const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: discogsHeaders() });
       if (!res.ok) {
@@ -6107,7 +6120,7 @@ async function loadCoversThrottled(rows, { onEach } = {}) {
 }
 
 async function autoLoadCover(row) {
-  await loadCoverForRow(row);
+  await loadCoverForRow(row, true);
   // Redibujar (carátula + canciones) solo si seguimos viendo el mismo disco
   if (selectedRow === row) renderView();
 }
@@ -6130,7 +6143,7 @@ async function reintentarCaratula(idx) {
   row[COL.caratula_url] = '';
   row[COL.tracklist_json] = '';
   showToast('Reintentando...');
-  await loadCoverForRow(row);
+  await loadCoverForRow(row, true);
   if (selectedRow === row) renderView();
 }
 
