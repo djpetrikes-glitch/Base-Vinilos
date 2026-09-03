@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.24 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.30 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -207,7 +207,7 @@
   .kallax-section { margin-top: 6px; }
   .kallax-unit { margin-bottom: 8px; }
   .kallax-label { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--text3); margin-bottom: 4px; }
-  .kallax-grid { display: grid; gap: 3px; }
+  .kallax-grid { display: grid; gap: 3px; max-width: 480px; }
   .kallax-grid-2x4 { grid-template-columns: repeat(4, 1fr); }
   .kallax-grid-4x4 { grid-template-columns: repeat(4, 1fr); }
   .kc { aspect-ratio: 1; border: 1px solid var(--border); border-radius: 4px; background: var(--bg3); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: 10px; font-weight: 600; color: var(--text3); cursor: pointer; transition: all .15s; }
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.24</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.30</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -468,16 +468,22 @@ const COL = {
   rating: 5, year: 6, release_id: 7, folder: 8, date_added: 9,
   fuente: 10, sleeve: 11, notes: 12, num: 13, album: 14,
   length: 15, bpm: 16, genre: 17, composer: 18, remixer: 19,
-  filename: 20, file_format: 21, ripeado: 22, ripeado_por: 23, digital_estado: 24,
-  kallax_slot: 25,
-  cantidad: 26,
-  estado_fisico: 27,
-  corte_problema: 28,
-  formato_rip: 29,
-  limpio: 30,
-  fecha_limpieza: 31,
-  limpieza_profunda: 32,
-  propietario: 33
+  filename: 20, file_format: 21, ripeado: 22, ripeado_por: 23,
+  kallax_slot: 24,
+  cantidad: 25,
+  estado_fisico: 26,
+  corte_problema: 27,
+  limpio: 28,
+  fecha_limpieza: 29,
+  limpieza_profunda: 30,
+  propietario: 31,
+  caratula_url: 32,
+  tracklist_json: 33,
+  // Estas dos columnas no existen todavía en el Sheet real — hay que añadirlas al final
+  // ("Digital" y "Formato Rip", en ese orden) para que estos dos índices tengan dónde
+  // escribir. Antes vivían desplazadas sobre columnas que ya tenían otro significado.
+  digital_estado: 34,
+  formato_rip: 35
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -499,12 +505,14 @@ let filterGenre = '';
 let sortCol = 'catalog';
 let sortDir = 1;
 let searchQ = '';
+// Hueco seleccionado dentro de la vista Kallax (null = viendo la estantería entera)
+let kallaxHuecoSel = null;
 
 // Ajustes de las estanterías Kallax — cuántos huecos activos hay y cuántos discos caben
 // en cada uno. Editable en Configuración, para poder ajustarlo sin tocar código si al
 // final no caben 100 en un hueco o se añaden más huecos en el futuro.
 const KALLAX_CONFIG_KEY = 'vinylbase_kallaxConfig';
-let kallaxConfig = { numHuecos: 13, porHueco: 100 };
+let kallaxConfig = { numHuecos: 15, porHueco: 100 };
 try {
   const savedKallax = JSON.parse(localStorage.getItem(KALLAX_CONFIG_KEY) || 'null');
   if (savedKallax) kallaxConfig = { ...kallaxConfig, ...savedKallax };
@@ -4395,6 +4403,7 @@ function setView(v) {
   filterDigital = 'all';
   searchQ = '';
   selectedRow = null;
+  kallaxHuecoSel = null;
   renderTabsL1();
   renderView();
 }
@@ -4417,6 +4426,7 @@ function renderView() {
   if (view === 'explorador') { renderExplorador(); return; }
   if (view === 'comparador') { renderComparador(); return; }
   if (view === 'normalizados') { renderNormalizados(); return; }
+  if (view === 'kallax') { renderKallaxView(); return; }
 
   // Guardar posición de scroll de la tabla antes de redibujar
   const prevTableWrap = document.querySelector('.table-wrap');
@@ -5671,6 +5681,23 @@ async function loadCoverForRow(row) {
   // mirábamos coverCache, esta función se saltaba entera y la tracklist se quedaba sin
   // traer nunca (hasta recargar la página, que vacía los cachés y fuerza a traerlo todo).
   if (coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined) return coverCache[cleanId];
+
+  // Antes de llamar a Discogs: si este disco ya tiene carátula/tracklist guardados en el
+  // Sheet (columnas Caratula url / tacklist json — los rellena "Poner Carátulas" o un
+  // fetch anterior de cualquiera de los dos), nos los quedamos tal cual y nos ahorramos
+  // la llamada a la API.
+  const urlGuardada = g(row, COL.caratula_url);
+  const tracklistGuardado = g(row, COL.tracklist_json);
+  if (urlGuardada || tracklistGuardado) {
+    coverCache[cleanId] = urlGuardada || null;
+    try {
+      tracklistCache[cleanId] = tracklistGuardado ? JSON.parse(tracklistGuardado) : [];
+    } catch(e) {
+      tracklistCache[cleanId] = [];
+    }
+    return coverCache[cleanId];
+  }
+
   try {
     const res = await fetch(`https://api.discogs.com/releases/${cleanId}`, { headers: DISCOGS_HEADERS });
     if (!res.ok) {
@@ -5682,11 +5709,25 @@ async function loadCoverForRow(row) {
     const images = data.images || [];
     const primary = images.find(i => i.type === 'primary');
     const img = (primary && primary.uri) || (images[0] && images[0].uri) || null;
-    coverCache[cleanId] = img;
-    tracklistCache[cleanId] = (data.tracklist || []).map(t => ({
+    const tracklist = (data.tracklist || []).map(t => ({
       position: t.position || '', title: t.title || '', duration: t.duration || ''
     }));
+    coverCache[cleanId] = img;
+    tracklistCache[cleanId] = tracklist;
     delete coverFetchErrors[cleanId];
+
+    // Lo guardamos en el Sheet para que la próxima vez (tú o Paquillo) no haga falta
+    // volver a pedírselo a Discogs. No bloqueamos la carátula en pantalla por esto —
+    // si falla el guardado, simplemente se volverá a pedir la próxima vez.
+    if (img) {
+      row[COL.caratula_url] = img;
+      row[COL.tracklist_json] = JSON.stringify(tracklist);
+      postToSheet(row, [
+        { col: COL.caratula_url, value: img },
+        { col: COL.tracklist_json, value: JSON.stringify(tracklist) },
+      ]).catch(e => console.error('[loadCoverForRow] no se pudo cachear en el Sheet', e));
+    }
+
     return img;
   } catch(e) {
     console.error('[loadCoverForRow] release', cleanId, e);
@@ -6233,13 +6274,13 @@ function copyLink() {
 // ─── KALLAX ───────────────────────────────────────────────────────────────────
 // true = hueco con vinilos, false = vacío/no usado
 const KALLAX_2x4 = [
-  [null, null, 2,  1], // fila 1: huecos 1 y 2 (derecha a izquierda)
-  [null, 5,    4,  3], // fila 2: huecos 3, 4, 5
+  [null, null, 1,  2], // fila 1: huecos 1 y 2
+  [null, 3,    4,  5], // fila 2: huecos 3, 4, 5
 ];
 const KALLAX_4x4 = [
-  [9,    8,    7,  6 ], // fila 1: huecos 6-9
-  [null, 12,   11, 10], // fila 2: huecos 10-12
-  [null, 15,   14, 13], // fila 3: huecos 13-15
+  [6,    7,    8,  9 ], // fila 1: huecos 6-9
+  [null, 10,   11, 12], // fila 2: huecos 10-12
+  [null, 13,   14, 15], // fila 3: huecos 13-15
   [null, null, null, null], // fila 4: no se usa
 ];
 
@@ -6266,6 +6307,16 @@ function compareNatural(a, b) {
   return 0;
 }
 
+// Un disco es candidato a la Kallax si es vinilo y no es de Paquillo — la misma regla que
+// ownerMatchesPerfil usa por defecto (Propietario vacío = tuyo). La Kallax es solo tuya;
+// Paquillo tiene su propia estantería, todavía por definir, así que sus discos nunca
+// deben ocupar un hueco aquí aunque alguien pulse "Colocar automáticamente" con uno de
+// los suyos abierto.
+function esCandidatoKallax(row) {
+  if (!isVinyl(row)) return false;
+  return (g(row, COL.propietario) || '').toLowerCase() !== 'paquillo';
+}
+
 // Calcula dónde debería ir CADA disco ya colocado (más el nuevo, idxNuevo) si se ordenan
 // todos por referencia de catálogo (de más baja a más alta) y se reparten en tandas de
 // kallaxConfig.porHueco por hueco — el hueco MÁS ALTO (numHuecos) se lleva las referencias
@@ -6275,9 +6326,10 @@ function compareNatural(a, b) {
 // verdad cambian de hueco respecto a donde están ahora (normalmente muy pocos, los que
 // caen justo en el borde entre dos huecos).
 function calcularRecolocacionKallax(idxNuevoOVarios) {
-  const nuevos = Array.isArray(idxNuevoOVarios) ? idxNuevoOVarios : [idxNuevoOVarios];
+  const nuevos = (Array.isArray(idxNuevoOVarios) ? idxNuevoOVarios : [idxNuevoOVarios])
+    .filter(i => esCandidatoKallax(allData[i]));
   const idxSet = new Set();
-  allData.forEach((r, i) => { if (g(r, COL.kallax_slot)) idxSet.add(i); });
+  allData.forEach((r, i) => { if (esCandidatoKallax(r) && g(r, COL.kallax_slot)) idxSet.add(i); });
   nuevos.forEach(i => idxSet.add(i));
   const idxs = [...idxSet];
   idxs.sort((ia, ib) => compareNatural(g(allData[ia], COL.catalog), g(allData[ib], COL.catalog)));
@@ -6295,6 +6347,10 @@ function calcularRecolocacionKallax(idxNuevoOVarios) {
 }
 
 async function colocarKallaxAutomatico(idx) {
+  if (!esCandidatoKallax(allData[idx])) {
+    showToast('⚠ La Kallax es solo para tus discos, este es de Paquillo', true);
+    return;
+  }
   const { moves, overflow, total } = calcularRecolocacionKallax(idx);
   if (overflow) {
     showToast(`⚠ No caben todos: ${total} discos para ${kallaxConfig.numHuecos} huecos de ${kallaxConfig.porHueco} — ajusta esto en Configuración`, true);
@@ -6304,16 +6360,115 @@ async function colocarKallaxAutomatico(idx) {
     showToast('✓ Ya está en el hueco que le toca por orden de catálogo — no hay que mover nada');
     return;
   }
-  const texto = moves.map(m => {
-    const r = allData[m.idx];
-    const nombre = `${g(r, COL.artist)} — ${g(r, COL.title)}${g(r, COL.catalog) ? ' (' + g(r, COL.catalog) + ')' : ''}`;
-    return m.from ? `${nombre}: hueco ${m.from} → ${m.to}` : `${nombre}: → hueco ${m.to} (nuevo)`;
-  }).join('\n');
-  if (!confirm(`Por orden de catálogo, hay que mover ${moves.length} disco(s) para hacer sitio:\n\n${texto}\n\nMuévelos físicamente en la estantería y dale a Aceptar para guardar la nueva colocación.`)) return;
+  const ok = await mostrarConfirmMovimientosKallax(moves, 'Por orden de catálogo, hay que mover estos discos para hacer sitio: ');
+  if (!ok) return;
 
   showToast(`Guardando la nueva colocación de ${moves.length} disco(s)...`);
   moves.forEach(m => { allData[m.idx][COL.kallax_slot] = String(m.to); });
   selectedRow = allData[idx];
+  renderView();
+  for (const m of moves) {
+    await saveToSheet(m.idx);
+  }
+  showToast(`✓ Colocación actualizada — ${moves.length} disco(s) movidos`);
+}
+
+// Modal de confirmación con una tarjeta por disco (carátula + info simple) en vez del
+// confirm() de texto plano — se usa tanto para colocar uno solo como para la reubicación
+// masiva de ripeados. Usa la carátula que ya tengamos en memoria (coverCache) o, si no,
+// la guardada en el Sheet (Caratula url); si no hay ninguna, un icono simple.
+function mostrarConfirmMovimientosKallax(moves, intro) {
+  return new Promise((resolve) => {
+    const overlayId = 'modal-mover-kallax';
+    document.getElementById(overlayId)?.remove();
+
+    const cards = moves.map(m => {
+      const r = allData[m.idx];
+      const releaseId = g(r, COL.release_id);
+      const cleanId = releaseId ? releaseId.toString().slice(0, -1) : null;
+      const cover = (cleanId && coverCache[cleanId]) || g(r, COL.caratula_url) || null;
+      return `
+        <div style="display:flex;gap:10px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:10px;background:var(--bg2)">
+          <div style="width:48px;height:48px;flex-shrink:0;border-radius:6px;overflow:hidden;background:var(--bg3);display:flex;align-items:center;justify-content:center">
+            ${cover ? `<img src="${cover}" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g(r,COL.artist)} — ${g(r,COL.title)}</div>
+            <div style="font-size:11px;color:var(--text3);font-family:var(--font-mono)">${g(r,COL.catalog) || '—'}</div>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:13px;font-weight:700;white-space:nowrap;flex-shrink:0">
+            ${m.from ? `${m.from} → <span style="color:var(--accent)">${m.to}</span>` : `<span style="color:var(--accent)">${m.to}</span> <span style="font-weight:400;color:var(--text3)">(nuevo)</span>`}
+          </div>
+        </div>`;
+    }).join('');
+
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-overlay" id="${overlayId}">
+        <div class="modal" style="max-width:520px">
+          <div class="modal-head"><h2>Mover ${moves.length} disco${moves.length === 1 ? '' : 's'}</h2></div>
+          <div class="modal-body">
+            <p style="font-size:12px;color:var(--text3);margin:0">${intro || ''}Muévelos físicamente en la estantería y luego dale a Guardar.</p>
+            <div style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto">${cards}</div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn" onclick="window.__resolverModalKallax(false)">Cancelar</button>
+            <button class="btn btn-accent" onclick="window.__resolverModalKallax(true)">Guardar</button>
+          </div>
+        </div>
+      </div>`);
+
+    window.__resolverModalKallax = (ok) => {
+      document.getElementById(overlayId)?.remove();
+      delete window.__resolverModalKallax;
+      resolve(ok);
+    };
+  });
+}
+
+// Un disco está "ripeado" con el mismo criterio que se usa en el resto de la app
+// (columna Ripeado = "Sí"/"si").
+function esRipeado(row) {
+  const v = g(row, COL.ripeado).toLowerCase();
+  return v === 'si' || v === 'sí';
+}
+
+// Reubicación MASIVA: coge TODOS los ripeados (tuyos, no de Paquillo) y los reparte desde
+// cero por orden de catálogo, empezando por el hueco 15 y bajando de 100 en 100 — a
+// diferencia de calcularRecolocacionKallax (que solo añade uno nuevo a lo ya colocado),
+// esta recalcula el reparto entero de los ripeados cada vez que se lanza.
+function calcularReubicacionRipeados() {
+  const idxs = allData
+    .map((r, i) => i)
+    .filter(i => esCandidatoKallax(allData[i]) && esRipeado(allData[i]));
+  idxs.sort((ia, ib) => compareNatural(g(allData[ia], COL.catalog), g(allData[ib], COL.catalog)));
+
+  const overflow = idxs.length > kallaxConfig.numHuecos * kallaxConfig.porHueco;
+  const moves = [];
+  idxs.forEach((i, pos) => {
+    const huecoIdeal = Math.max(1, kallaxConfig.numHuecos - Math.floor(pos / kallaxConfig.porHueco));
+    const huecoActual = g(allData[i], COL.kallax_slot);
+    if (String(huecoActual) !== String(huecoIdeal)) {
+      moves.push({ idx: i, from: huecoActual || null, to: huecoIdeal });
+    }
+  });
+  return { moves, overflow, total: idxs.length };
+}
+
+async function reubicarRipeadosEnKallax() {
+  const { moves, overflow, total } = calcularReubicacionRipeados();
+  if (overflow) {
+    showToast(`⚠ No caben todos: ${total} ripeados para ${kallaxConfig.numHuecos} huecos de ${kallaxConfig.porHueco} — ajusta esto en Configuración`, true);
+    return;
+  }
+  if (!moves.length) {
+    showToast(`✓ Los ${total} ripeados ya están en su hueco por orden de catálogo — no hay que mover nada`);
+    return;
+  }
+  const ok = await mostrarConfirmMovimientosKallax(moves, `${total} ripeados en total, repartidos desde el hueco ${kallaxConfig.numHuecos}. `);
+  if (!ok) return;
+
+  showToast(`Guardando la nueva colocación de ${moves.length} disco(s)...`);
+  moves.forEach(m => { allData[m.idx][COL.kallax_slot] = String(m.to); });
   renderView();
   for (const m of moves) {
     await saveToSheet(m.idx);
@@ -6355,6 +6510,75 @@ function renderKallax(selectedSlot, onSelect) {
   </div>`;
 }
 
+// ─── VISTA "KALLAX" (pestaña de Colección) ─────────────────────────────────────
+// Sin hueco elegido: la estantería entera, clicable. Con hueco elegido: la lista de
+// discos que hay dentro, en el mismo orden (y con la misma posición 1..porHueco) que
+// physically van colocados, y al pinchar uno se abre su ficha de siempre a la derecha.
+function irAHueco(slot) {
+  kallaxHuecoSel = slot;
+  selectedRow = null;
+  renderView();
+}
+function volverAKallaxGrid() {
+  kallaxHuecoSel = null;
+  selectedRow = null;
+  renderView();
+}
+function verDiscoDeHueco(idx) {
+  selectedRow = allData[idx];
+  renderView();
+}
+
+function renderListaHueco(slot) {
+  const discos = allData
+    .filter(r => esCandidatoKallax(r) && String(g(r, COL.kallax_slot)) === String(slot))
+    .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
+
+  if (!discos.length) {
+    return `<div class="state-center"><p>Hueco ${slot} está vacío</p></div>`;
+  }
+  return `<div style="display:flex;flex-direction:column;gap:6px;padding:4px 0">
+    ${discos.map((r) => {
+      const idx = allData.indexOf(r);
+      const pos = discos.indexOf(r) + 1;
+      const isSel = selectedRow === r;
+      return `<div onclick="verDiscoDeHueco(${idx})" style="display:flex;align-items:center;gap:12px;padding:8px 12px;border:1.5px solid ${isSel ? 'var(--accent)' : 'var(--border)'};background:${isSel ? 'var(--accent-bg)' : 'var(--bg2)'};border-radius:10px;cursor:pointer">
+        <span style="font-family:var(--font-mono);font-weight:700;color:var(--accent);min-width:52px;text-align:right">${pos}/${discos.length}</span>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text3);min-width:80px">${g(r,COL.catalog) || '—'}</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${g(r,COL.artist)}</b> — ${g(r,COL.title)}</span>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderKallaxView() {
+  const totalDiscos = allData.filter(esCandidatoKallax).length;
+  const sinUbicar = allData.filter(r => esCandidatoKallax(r) && !g(r, COL.kallax_slot)).length;
+
+  document.getElementById('main-content').innerHTML = `
+    <div class="topbar">
+      <span class="page-title">Kallax</span>
+      ${kallaxHuecoSel ? `<button class="btn" onclick="volverAKallaxGrid()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Volver a la estantería
+      </button>` : `<button class="btn" onclick="reubicarRipeadosEnKallax()" title="Recalcula el hueco de cada ripeado por orden de catálogo, empezando por el hueco ${kallaxConfig.numHuecos}">
+        🔀 Reubicar ripeados
+      </button>`}
+      <span style="font-size:11px;color:var(--text3);font-family:var(--font-mono)">
+        ${totalDiscos.toLocaleString()} discos${sinUbicar ? ` · ${sinUbicar} sin ubicar` : ''}
+      </span>
+    </div>
+    <div style="display:flex;flex:1;min-height:0;flex-direction:row-reverse;overflow:hidden">
+      <div class="table-wrap" style="flex:1;padding:16px">
+        ${kallaxHuecoSel
+          ? `<h3 style="margin:0 0 12px">Hueco ${kallaxHuecoSel}</h3>${renderListaHueco(kallaxHuecoSel)}`
+          : renderKallax(null, 'irAHueco')}
+      </div>
+      ${selectedRow ? renderDetail(selectedRow) : `<div class="detail"><div class="state-center" style="padding:40px 16px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg><p style="text-align:center;font-size:12px">${kallaxHuecoSel ? 'Selecciona un disco<br>para ver el detalle' : 'Pincha en un hueco<br>para ver lo que tiene dentro'}</p></div></div>`}
+    </div>
+  `;
+}
+
 function setKallaxSlot(idx, slot) {
   allData[idx][COL.kallax_slot] = String(slot);
   selectedRow = allData[idx];
@@ -6388,7 +6612,8 @@ const SECTIONS = {
   coleccion: { label: 'Colección', stamp: 'CL', views: [
     { id: 'vinilos', label: 'Vinilos', stamp: 'VN' },
     { id: 'digital', label: 'Digitales', stamp: 'DG' },
-    { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' }
+    { id: 'temasjuntos', label: 'Todos Juntos', stamp: 'TJ' },
+    { id: 'kallax', label: 'Kallax', stamp: 'KX' }
   ]},
   herramientas: { label: 'Herramientas', stamp: 'HR', views: [
     { id: 'nuevovinilo', label: 'Añadir vinilo', action: 'openModal', stamp: '+' },
