@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.39 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.40 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -331,7 +331,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.39</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.40</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -5698,6 +5698,64 @@ function renderSesiones() {
 const tracklistCache = {};
 const coverFetchErrors = {}; // cleanId -> mensaje, para poder avisar en vez de dejarlo en "Cargando..." para siempre
 
+// Antes de corregir el mapeo de columnas, la app guardó carátulas/tracklists en las
+// columnas 32/33 (que en realidad son "Limpieza profunda" y "Propietario") sin saberlo.
+// Esos dos campos guardan texto corto ("Sí"/nombre), así que una URL (empieza por "http")
+// o un tracklist (empieza por "[") ahí es inconfundiblemente un resto de esto, nunca un
+// valor real de esos campos — se puede distinguir sin ambigüedad y limpiar con seguridad.
+async function migrarCaratulasOrfanas() {
+  const candidatos = [];
+  allData.forEach((row, idx) => {
+    const viejaUrl = (row[32] || '').toString();
+    const viejoTracklist = (row[33] || '').toString();
+    const esUrlOrfana = viejaUrl.startsWith('http');
+    const esTracklistOrfano = viejoTracklist.startsWith('[');
+    if (!esUrlOrfana && !esTracklistOrfano) return;
+    if (g(row, COL.caratula_url) || g(row, COL.tracklist_json)) return; // ya tiene, no hace falta
+    candidatos.push(idx);
+  });
+
+  if (!candidatos.length) {
+    showToast('✓ No hay carátulas sueltas que recuperar');
+    return;
+  }
+
+  showToast(`Recuperando ${candidatos.length} carátula(s) guardadas estos días (sin pedírselo a Discogs)...`, false, true);
+  for (const idx of candidatos) {
+    const row = allData[idx];
+    const url = (row[32] || '').toString();
+    const tracklist = (row[33] || '').toString();
+    const fields = [];
+
+    if (url.startsWith('http')) {
+      row[COL.caratula_url] = url;
+      row[32] = ''; // limpiamos "Limpieza profunda" del resto
+      fields.push({ col: COL.caratula_url, value: url });
+      fields.push({ col: 32, value: '' });
+    }
+    if (tracklist.startsWith('[')) {
+      row[COL.tracklist_json] = tracklist;
+      row[33] = ''; // limpiamos "Propietario" del resto
+      fields.push({ col: COL.tracklist_json, value: tracklist });
+      fields.push({ col: 33, value: '' });
+    }
+
+    // Refrescamos también el caché en memoria para que se vea al momento sin recargar.
+    const releaseId = g(row, COL.release_id);
+    if (releaseId) {
+      const cleanId = releaseId.toString().slice(0, -1);
+      if (url.startsWith('http')) coverCache[cleanId] = url;
+      if (tracklist.startsWith('[')) {
+        try { tracklistCache[cleanId] = JSON.parse(tracklist); } catch(e) { tracklistCache[cleanId] = []; }
+      }
+    }
+
+    await postToSheet(row, fields);
+  }
+  showToast(`✓ ${candidatos.length} carátula(s) recuperadas`);
+  renderView();
+}
+
 async function loadCoverForRow(row) {
   const releaseId = g(row, COL.release_id);
   if (!releaseId) return null;
@@ -6749,6 +6807,7 @@ const SECTIONS = {
   herramientas: { label: 'Herramientas', stamp: 'HR', views: [
     { id: 'nuevovinilo', label: 'Añadir vinilo', action: 'openModal', stamp: '+' },
     { id: 'caratulas', label: 'Poner Carátulas', action: 'lanzarPonerCaratulas', stamp: 'PC' },
+    { id: 'recuperarcaratulas', label: 'Recuperar carátulas sueltas', action: 'migrarCaratulasOrfanas', stamp: 'RC' },
     { id: 'buscador', label: '¿Tengo este tema?', stamp: '?' },
     { id: 'cortador', label: 'Edición de audio', stamp: 'EA' },
     { id: 'auditoria', label: 'Verificar ripeados', stamp: 'VR' },
