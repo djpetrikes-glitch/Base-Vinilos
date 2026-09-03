@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.44 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.48 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -225,17 +225,22 @@
   .kallax-hueco-box-label { font-family: var(--font-display); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); }
   .kallax-hueco-box-num { font-family: var(--font-display); font-weight: 800; font-size: 48px; line-height: 1; color: var(--accent-dark); }
   .kallax-hueco-box-count { font-family: var(--font-mono); font-weight: 700; font-size: 15px; color: var(--accent-dark); background: var(--bg2); border: 1.5px solid var(--accent); border-radius: 999px; padding: 5px 14px; }
+  .kallax-hueco-nav { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .kallax-hueco-mini { width: 96px; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); cursor: pointer; transition: all .15s; }
+  .kallax-hueco-mini:hover { border-color: var(--accent); background: var(--accent-bg); }
+  .kallax-hueco-mini-num { font-family: var(--font-display); font-weight: 700; font-size: 15px; color: var(--text2); }
+  .kallax-hueco-mini-count { font-family: var(--font-mono); font-size: 10px; color: var(--text3); }
   .kallax-unit { margin-bottom: 8px; }
   .kallax-label { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--text3); margin-bottom: 4px; }
   .kallax-grid { display: grid; gap: 3px; max-width: 480px; }
   /* Versión grande: la estantería cuando ocupa la pantalla entera en la pestaña Kallax
      (no se usa en el widget pequeño de dentro de la ficha de un disco, que se queda con
      el tamaño de siempre). */
-  .kallax-grande .kallax-unit { margin-bottom: 14px; }
-  .kallax-grande .kallax-label { font-size: 14px; margin-bottom: 8px; }
-  .kallax-grande .kallax-grid { max-width: 900px; gap: 10px; }
-  .kallax-grande .kc { font-size: 26px; border-radius: 10px; border-width: 2px; }
-  .kallax-grande .kc > div:last-child { font-size: 14px !important; margin-top: 4px; }
+  .kallax-grande .kallax-unit { margin-bottom: 20px; }
+  .kallax-grande .kallax-label { font-size: 18px; margin-bottom: 10px; }
+  .kallax-grande .kallax-grid { max-width: 1400px; width: 100%; gap: 16px; }
+  .kallax-grande .kc { font-size: 40px; border-radius: 14px; border-width: 3px; }
+  .kallax-grande .kc > div:last-child { font-size: 18px !important; margin-top: 6px; }
   .kallax-grid-2x4 { grid-template-columns: repeat(4, 1fr); }
   .kallax-grid-4x4 { grid-template-columns: repeat(4, 1fr); }
   .kc { aspect-ratio: 1; border: 1px solid var(--border); border-radius: 4px; background: var(--bg3); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: 10px; font-weight: 600; color: var(--text3); cursor: pointer; transition: all .15s; }
@@ -347,7 +352,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.44</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.48</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -6697,6 +6702,30 @@ function volverAKallaxGrid() {
   selectedRow = null;
   renderView();
 }
+// Tira vertical con TODOS los huecos (1 arriba, numHuecos abajo) — el que estás mirando
+// sale grande y resaltado en su sitio natural dentro de la secuencia, con los anteriores
+// encima y los siguientes debajo, más pequeños, y cualquiera de ellos se puede pinchar
+// para saltar directo sin volver a la estantería entera.
+function renderNavHuecos(actual, countActual) {
+  const items = [];
+  for (let n = 1; n <= kallaxConfig.numHuecos; n++) {
+    if (n === Number(actual)) {
+      items.push(`<div class="kallax-hueco-box">
+        <div class="kallax-hueco-box-label">Hueco</div>
+        <div class="kallax-hueco-box-num">${n}</div>
+        <div class="kallax-hueco-box-count">${countActual}/${kallaxConfig.porHueco}</div>
+      </div>`);
+    } else {
+      const count = allData.filter(r => esCandidatoKallax(r) && String(g(r, COL.kallax_slot)) === String(n)).length;
+      items.push(`<div class="kallax-hueco-mini" onclick="irAHueco(${n})">
+        <span class="kallax-hueco-mini-num">${n}</span>
+        <span class="kallax-hueco-mini-count">${count}/${kallaxConfig.porHueco}</span>
+      </div>`);
+    }
+  }
+  return `<div class="kallax-hueco-nav">${items.join('')}</div>`;
+}
+
 function verEnVinilos(idx) {
   view = 'vinilos';
   selectedRow = allData[idx];
@@ -6731,9 +6760,9 @@ function cerrarMenuHuecoDisco() {
   document.getElementById('modal-menu-hueco-disco')?.remove();
 }
 
-function moverDesdeMenuHueco(idx, slot) {
+async function moverDesdeMenuHueco(idx, slot) {
   cerrarMenuHuecoDisco();
-  setKallaxSlot(idx, slot);
+  await setKallaxSlot(idx, slot);
 }
 
 function renderTarjetasHueco(discos) {
@@ -6750,19 +6779,26 @@ function renderTarjetasHueco(discos) {
       if (!tracklist) {
         try { tracklist = JSON.parse(g(r, COL.tracklist_json) || '[]'); } catch(e) { tracklist = []; }
       }
-      return `<div class="kallax-card" onclick="abrirMenuHuecoDisco(${idx})">
-        <div class="kallax-card-cover">
-          ${cover ? `<img src="${cover}" loading="lazy">` : `<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
-          <span class="kallax-card-pos">${i + 1}/${discos.length}</span>
+      const tracksHtml = tracklist && tracklist.length
+        ? `<div class="tracklist">
+            ${tracklist.map(t => `
+              <div class="track-row" style="flex-direction:column;align-items:flex-start;border:1px dashed var(--border);border-radius:6px;padding:6px 8px;margin-bottom:4px;cursor:default">
+                <span class="track-title" style="white-space:normal">${t.position ? t.position + ' — ' : ''}${t.title}</span>
+                ${t.duration ? `<span style="font-size:10px;color:var(--text3)">${t.duration}</span>` : ''}
+              </div>`).join('')}
+          </div>`
+        : '';
+      return `<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg3);display:flex;flex-direction:column;min-width:0;cursor:pointer" onclick="abrirMenuHuecoDisco(${idx})">
+        <div style="width:100%;aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0">
+          ${cover ? `<img src="${cover}" loading="lazy" style="width:100%;height:100%;object-fit:cover">` : `<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`}
         </div>
-        <div class="kallax-card-body">
+        <div style="padding:8px">
           <div class="kallax-card-posicion">📍 Posición ${i + 1}/${discos.length}</div>
-          <div class="kallax-card-title">${g(r,COL.artist)} — ${g(r,COL.title)}</div>
-          <div class="kallax-card-catalog">${g(r,COL.catalog) || '—'}</div>
+          <div style="font-size:9px;color:var(--text3);margin-bottom:1px">${g(r,COL.catalog) || ''}</div>
+          <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.artist)}</div>
+          <div style="font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g(r,COL.title)}</div>
+          <div style="margin-top:8px">${tracksHtml}</div>
         </div>
-        ${tracklist && tracklist.length ? `<div class="kallax-card-tracks">${tracklist.map(t => `
-          <div class="kallax-card-track"><span>${t.position ? t.position + '. ' : ''}${t.title}</span>${t.duration ? `<span class="kallax-card-track-dur">${t.duration}</span>` : ''}</div>
-        `).join('')}</div>` : ''}
       </div>`;
     }).join('')}
   </div>`;
@@ -6779,12 +6815,8 @@ function renderKallaxView() {
       .sort((a, b) => compareNatural(g(a, COL.catalog), g(b, COL.catalog)));
     cuerpo = `
       <div style="display:flex;flex:1;min-height:0;overflow:hidden">
-        <div style="padding:16px;flex-shrink:0">
-          <div class="kallax-hueco-box">
-            <div class="kallax-hueco-box-label">Hueco</div>
-            <div class="kallax-hueco-box-num">${kallaxHuecoSel}</div>
-            <div class="kallax-hueco-box-count">${discos.length}/${kallaxConfig.porHueco}</div>
-          </div>
+        <div style="padding:16px;flex-shrink:0;overflow-y:auto">
+          ${renderNavHuecos(kallaxHuecoSel, discos.length)}
         </div>
         <div class="table-wrap" style="flex:1;padding:16px 16px 16px 0;overflow-y:auto">
           ${renderTarjetasHueco(discos)}
@@ -6811,12 +6843,12 @@ function renderKallaxView() {
   `;
 }
 
-function setKallaxSlot(idx, slot) {
+async function setKallaxSlot(idx, slot) {
   allData[idx][COL.kallax_slot] = String(slot);
   selectedRow = allData[idx];
   renderView();
-  showToast('\u2713 Ubicado en hueco ' + slot);
-  saveToSheet(idx);
+  showToast(`Guardando hueco ${slot}...`, false, true);
+  await saveToSheet(idx);
 }
 
 async function quitarDeKallax(idx) {
