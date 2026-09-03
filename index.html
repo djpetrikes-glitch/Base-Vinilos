@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.32 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.34 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -331,7 +331,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.32</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.34</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -2199,10 +2199,10 @@ async function confirmCortadorAssociation() {
 }
 
 // Al terminar de cortar y guardar los temas, si el disco no lo tenías puesto en la Kallax
-// a mano todavía, se coloca solo (mismo cálculo que "Colocar automáticamente"). Evita que
-// un ripeado se quede sin sitio hasta que te acuerdes de pulsarlo tú. También marca el
-// disco como ripeado si no lo estaba ya — así el contador de ripeados y lo que hay puesto
-// en la Kallax no se desincronizan con el tiempo.
+// a mano todavía, se coloca solo (mismo cálculo que "Colocar automáticamente"). También
+// marca el disco como ripeado, limpio (siempre se limpia antes de grabar, así es su flujo
+// real de trabajo) y en formato WAV (lo que saca siempre este cortador) si no lo estaban
+// ya — así no hace falta ir luego a Vinilos a ponerlo todo a mano.
 async function marcarRipeadosYColocarKallax(discosSesion) {
   const idxsParaKallax = [];
   const idxsTocados = new Set();
@@ -2214,7 +2214,16 @@ async function marcarRipeadosYColocarKallax(discosSesion) {
     const yaRipeado = g(row, COL.ripeado).toLowerCase() === 'sí' || g(row, COL.ripeado).toLowerCase() === 'si';
     if (!yaRipeado) {
       row[COL.ripeado] = 'Sí';
-      if (!row[COL.ripeado_por]) row[COL.ripeado_por] = 'DJ Petrik';
+      if (!row[COL.ripeado_por]) row[COL.ripeado_por] = PERFIL_NOMBRES[perfil] || 'Dj Petrik';
+      idxsTocados.add(idx);
+    }
+    if (g(row, COL.limpio) !== 'Sí') {
+      row[COL.limpio] = 'Sí';
+      row[COL.fecha_limpieza] = new Date().toLocaleDateString('es-ES');
+      idxsTocados.add(idx);
+    }
+    if (g(row, COL.formato_rip) !== 'WAV') {
+      row[COL.formato_rip] = 'WAV';
       idxsTocados.add(idx);
     }
     if (!g(row, COL.kallax_slot)) idxsParaKallax.push(idx);
@@ -2272,7 +2281,7 @@ function buildDiscFolderName(row) {
 // carpeta fija configurada, se pone a trabajar y se cierra solo al acabar, sin más clics.
 function abrirAyudanteCaratulas() {
   const a = document.createElement('a');
-  a.href = 'vinylbase-caratulas:run';
+  a.href = 'poner-caratulas://abrir';
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -2284,7 +2293,7 @@ function abrirAyudanteCaratulas() {
 // en cuanto un disco nuevo queda bien puesto en la cola.
 function abrirAyudanteAnadirSheet() {
   const a = document.createElement('a');
-  a.href = 'vinylbase-caratulas:sheet';
+  a.href = 'poner-caratulas://abrir';
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -2611,7 +2620,7 @@ async function resolverCarpetaDuplicada(idx, nombreElegido, nombreDescartado) {
 function marcarRipeadoDesdeAuditoria(idx) {
   const row = allData[idx];
   row[COL.ripeado] = 'Sí';
-  if (!row[COL.ripeado_por]) row[COL.ripeado_por] = 'DJ Petrik';
+  if (!row[COL.ripeado_por]) row[COL.ripeado_por] = PERFIL_NOMBRES[perfil] || 'Dj Petrik';
   saveToSheet(idx);
   if (auditoriaResults) {
     auditoriaResults.faltanMarcar = auditoriaResults.faltanMarcar.filter(e => e.idx !== idx);
@@ -5778,7 +5787,7 @@ function toggleRipped(idx) {
   const row = allData[idx];
   const isRipped = g(row, COL.ripeado).toLowerCase() === 'si' || g(row, COL.ripeado).toLowerCase() === 'sí';
   row[COL.ripeado] = isRipped ? 'No' : 'Sí';
-  if (!isRipped && !row[COL.ripeado_por]) row[COL.ripeado_por] = 'DJ Petrik';
+  if (!isRipped && !row[COL.ripeado_por]) row[COL.ripeado_por] = PERFIL_NOMBRES[perfil] || 'Dj Petrik';
   selectedRow = row;
   renderStats();
   renderView();
@@ -6537,11 +6546,37 @@ async function irAHueco(slot) {
   kallaxHuecoSel = slot;
   selectedRow = null;
   renderView();
-  // La mayoría ya estarán cacheadas (en memoria o en el Sheet), así que esto normalmente
-  // no llama a Discogs para nada — solo rellena lo que de verdad falte.
+
   const discos = allData.filter(r => esCandidatoKallax(r) && String(g(r, COL.kallax_slot)) === String(slot));
-  await Promise.all(discos.map(r => loadCoverForRow(r)));
-  if (kallaxHuecoSel === slot) renderView();
+  const pendientes = discos.filter(r => {
+    const releaseId = g(r, COL.release_id);
+    if (!releaseId) return false;
+    const cleanId = releaseId.toString().slice(0, -1);
+    return coverCache[cleanId] === undefined || tracklistCache[cleanId] === undefined;
+  });
+  let hechos = 0;
+  // De una en una, NUNCA en paralelo: Discogs limita las peticiones por minuto, y pedir
+  // 100 a la vez (como hacía esto antes) hace que casi todas rebajaso por límite de tasa
+  // y se queden marcadas como fallidas para el resto de la sesión — el mismo atasco que
+  // ya tuvimos con esto una vez. Si ya está cacheado (memoria o Sheet) no hay pausa.
+  for (const r of discos) {
+    if (kallaxHuecoSel !== slot) return; // has salido de este hueco, dejamos de pedir
+    const releaseId = g(r, COL.release_id);
+    if (!releaseId) continue;
+    const cleanId = releaseId.toString().slice(0, -1);
+    if (coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined) continue;
+    const teniaCacheEnSheet = !!(g(r, COL.caratula_url) || g(r, COL.tracklist_json));
+    if (!teniaCacheEnSheet && pendientes.length > 3) {
+      showToast(`Trayendo carátulas ${++hechos}/${pendientes.length}...`, false, true);
+    }
+    await loadCoverForRow(r);
+    if (kallaxHuecoSel === slot) renderView();
+    if (!teniaCacheEnSheet) {
+      // Esto sí ha tenido que ir a Discogs de verdad — dejamos un respiro.
+      await new Promise(res => setTimeout(res, 1100));
+    }
+  }
+  if (kallaxHuecoSel === slot && pendientes.length > 3) showToast('✓ Carátulas al día en este hueco');
 }
 function volverAKallaxGrid() {
   kallaxHuecoSel = null;
