@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.34 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.35 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -331,7 +331,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.34</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.35</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -4784,6 +4784,7 @@ function renderDetail(row) {
         📐 Colocar automáticamente por catálogo
       </button>
       ${renderKallax(g(row, COL.kallax_slot), 'setKallaxSlot.bind(null,' + allData.indexOf(row) + ')')}
+      ${g(row, COL.kallax_slot) ? `<button class="btn" style="width:100%;justify-content:center;margin-top:6px;color:var(--red)" onclick="quitarDeKallax(${allData.indexOf(row)})">✕ Quitar de la Kallax (hueco ${g(row, COL.kallax_slot)})</button>` : ''}
 
       <div class="d-section">Carátula</div>
       <div class="cover-btns">
@@ -6542,41 +6543,61 @@ function renderKallax(selectedSlot, onSelect) {
 // Sin hueco elegido: la estantería entera, clicable. Con hueco elegido: la lista de
 // discos que hay dentro, en el mismo orden (y con la misma posición 1..porHueco) que
 // physically van colocados, y al pinchar uno se abre su ficha de siempre a la derecha.
-async function irAHueco(slot) {
-  kallaxHuecoSel = slot;
-  selectedRow = null;
-  renderView();
+// Cola global de carátulas/tracklists pendientes — no depende de qué hueco o vista estés
+// mirando. Entrar en un hueco simplemente añade sus discos sin cachear a la cola; un único
+// "trabajador" en segundo plano la va vaciando de una en una (con respiro entre peticiones
+// reales a Discogs) sin importar a qué otra pantalla te vayas mientras tanto. Si vuelves a
+// entrar en un hueco cuya carga ya está en marcha, no se duplica ni se reinicia.
+let colaCaratulas = [];
+let colaCaratulasSet = new Set(); // cleanId ya en cola, para no meterlo dos veces
+let colaCaratulasCorriendo = false;
 
-  const discos = allData.filter(r => esCandidatoKallax(r) && String(g(r, COL.kallax_slot)) === String(slot));
-  const pendientes = discos.filter(r => {
-    const releaseId = g(r, COL.release_id);
-    if (!releaseId) return false;
-    const cleanId = releaseId.toString().slice(0, -1);
-    return coverCache[cleanId] === undefined || tracklistCache[cleanId] === undefined;
-  });
-  let hechos = 0;
-  // De una en una, NUNCA en paralelo: Discogs limita las peticiones por minuto, y pedir
-  // 100 a la vez (como hacía esto antes) hace que casi todas rebajaso por límite de tasa
-  // y se queden marcadas como fallidas para el resto de la sesión — el mismo atasco que
-  // ya tuvimos con esto una vez. Si ya está cacheado (memoria o Sheet) no hay pausa.
-  for (const r of discos) {
-    if (kallaxHuecoSel !== slot) return; // has salido de este hueco, dejamos de pedir
+function encolarCaratulas(rows) {
+  for (const r of rows) {
     const releaseId = g(r, COL.release_id);
     if (!releaseId) continue;
     const cleanId = releaseId.toString().slice(0, -1);
     if (coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined) continue;
+    if (colaCaratulasSet.has(cleanId)) continue;
+    colaCaratulasSet.add(cleanId);
+    colaCaratulas.push(r);
+  }
+  procesarColaCaratulas();
+}
+
+async function procesarColaCaratulas() {
+  if (colaCaratulasCorriendo) return; // ya hay un trabajador corriendo, no hace falta otro
+  colaCaratulasCorriendo = true;
+  let avisado = false;
+  while (colaCaratulas.length) {
+    const r = colaCaratulas.shift();
+    const releaseId = g(r, COL.release_id);
+    const cleanId = releaseId.toString().slice(0, -1);
+    colaCaratulasSet.delete(cleanId);
+    if (coverCache[cleanId] !== undefined && tracklistCache[cleanId] !== undefined) continue;
     const teniaCacheEnSheet = !!(g(r, COL.caratula_url) || g(r, COL.tracklist_json));
-    if (!teniaCacheEnSheet && pendientes.length > 3) {
-      showToast(`Trayendo carátulas ${++hechos}/${pendientes.length}...`, false, true);
+    if (!teniaCacheEnSheet) {
+      avisado = true;
+      showToast(`Trayendo carátulas en segundo plano (quedan ${colaCaratulas.length + 1}) — puedes seguir usando la app...`, false, true);
     }
     await loadCoverForRow(r);
-    if (kallaxHuecoSel === slot) renderView();
+    // Solo redibuja si de verdad estás mirando la Kallax ahora mismo — si te has ido a
+    // otra pestaña, sigue trabajando igual mientras haces lo que sea que estés haciendo.
+    if (view === 'kallax') renderView();
     if (!teniaCacheEnSheet) {
-      // Esto sí ha tenido que ir a Discogs de verdad — dejamos un respiro.
       await new Promise(res => setTimeout(res, 1100));
     }
   }
-  if (kallaxHuecoSel === slot && pendientes.length > 3) showToast('✓ Carátulas al día en este hueco');
+  colaCaratulasCorriendo = false;
+  if (avisado) showToast('✓ Carátulas al día');
+}
+
+function irAHueco(slot) {
+  kallaxHuecoSel = slot;
+  selectedRow = null;
+  renderView();
+  const discos = allData.filter(r => esCandidatoKallax(r) && String(g(r, COL.kallax_slot)) === String(slot));
+  encolarCaratulas(discos);
 }
 function volverAKallaxGrid() {
   kallaxHuecoSel = null;
@@ -6655,6 +6676,17 @@ function setKallaxSlot(idx, slot) {
   selectedRow = allData[idx];
   renderView();
   showToast('\u2713 Ubicado en hueco ' + slot);
+  saveToSheet(idx);
+}
+
+function quitarDeKallax(idx) {
+  const row = allData[idx];
+  const huecoAnterior = g(row, COL.kallax_slot);
+  if (!huecoAnterior) return;
+  row[COL.kallax_slot] = '';
+  selectedRow = row;
+  renderView();
+  showToast(`✓ Quitado del hueco ${huecoAnterior}`);
   saveToSheet(idx);
 }
 
