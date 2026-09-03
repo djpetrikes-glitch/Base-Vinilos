@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.35 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.39 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -331,7 +331,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.35</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.39</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -475,27 +475,32 @@ const DISCOGS_HEADERS = { 'Authorization': `Discogs token=${DISCOGS_TOKEN}`, 'Us
 const coverCache = {};
 
 // Columnas del sheet (índice 0)
+// Verificado línea a línea contra una descarga en crudo del Sheet (no fiarse de lecturas
+// "bonitas" en markdown — esconden columnas en blanco y desordenan el conteo). Hay dos
+// columnas sin cabecera (24 y 29) que SÍ tienen datos reales: 24 es el estado digital
+// (Confirmado/Verificar/No) y 29 es el formato de rip (WAV/FLAC/MP3) — ninguna de las dos
+// está "vacía", solo les falta el texto de la cabecera. caratula_url/tracklist_json viven
+// en 34/35: son datos que ya existían ahí desde antes del rollback a v3.22 (338 discos con
+// carátula ya cacheada), simplemente sin cabecera visible hasta que se escribió "Digital"/
+// "Formato rip" encima sin saber que ya había algo debajo.
 const COL = {
   catalog: 0, artist: 1, title: 2, label: 3, format: 4,
   rating: 5, year: 6, release_id: 7, folder: 8, date_added: 9,
   fuente: 10, sleeve: 11, notes: 12, num: 13, album: 14,
   length: 15, bpm: 16, genre: 17, composer: 18, remixer: 19,
   filename: 20, file_format: 21, ripeado: 22, ripeado_por: 23,
-  kallax_slot: 24,
-  cantidad: 25,
-  estado_fisico: 26,
-  corte_problema: 27,
-  limpio: 28,
-  fecha_limpieza: 29,
-  limpieza_profunda: 30,
-  propietario: 31,
-  caratula_url: 32,
-  tracklist_json: 33,
-  // Estas dos columnas no existen todavía en el Sheet real — hay que añadirlas al final
-  // ("Digital" y "Formato Rip", en ese orden) para que estos dos índices tengan dónde
-  // escribir. Antes vivían desplazadas sobre columnas que ya tenían otro significado.
-  digital_estado: 34,
-  formato_rip: 35
+  digital_estado: 24,
+  kallax_slot: 25,
+  cantidad: 26,
+  estado_fisico: 27,
+  corte_problema: 28,
+  formato_rip: 29,
+  limpio: 30,
+  fecha_limpieza: 31,
+  limpieza_profunda: 32,
+  propietario: 33,
+  caratula_url: 34,
+  tracklist_json: 35
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -4646,7 +4651,7 @@ function renderDetail(row) {
 
       <div class="d-artist">${g(row, COL.artist)}</div>
       <div class="d-title">${g(row, COL.title)}</div>
-      ${isV ? kallaxBadge(row) : ''}
+      ${isVinyl(row) ? kallaxBadge(row) : ''}
 
       <div class="d-field"><span class="d-label">Sello</span><span class="d-val">${g(row, COL.label)}</span></div>
       <div class="d-field"><span class="d-label">Año</span><span class="d-val">${g(row, COL.year)}</span></div>
@@ -6346,33 +6351,41 @@ function esCandidatoKallax(row) {
   return (g(row, COL.propietario) || '').toLowerCase() !== 'paquillo';
 }
 
-// Calcula dónde debería ir CADA disco ya colocado (más el nuevo, idxNuevo) si se ordenan
-// todos por referencia de catálogo (de más baja a más alta) y se reparten en tandas de
-// kallaxConfig.porHueco por hueco — el hueco MÁS ALTO (numHuecos) se lleva las referencias
-// más bajas y se llena primero; según va creciendo la colección, se sigue por el hueco
-// anterior, y así hacia el hueco 1 (así coloca físicamente Nicolás su Kallax — al revés
-// de numerar 1,2,3...: empieza por el hueco más alto y baja). Solo devuelve los que de
-// verdad cambian de hueco respecto a donde están ahora (normalmente muy pocos, los que
-// caen justo en el borde entre dos huecos).
+// El cálculo puro: dado un conjunto de índices cualquiera, dónde debería ir cada uno si se
+// ordenan por catálogo y se reparten en tandas de kallaxConfig.porHueco, empezando por el
+// hueco más alto (15) que se lleva las referencias MÁS ALTAS (la disco de la Z ocupa la
+// última posición del hueco 15) — y bajando hacia el hueco 1, que se queda con las
+// referencias más bajas si hay suficientes discos para llegar hasta allí. Lo usan tanto
+// "añadir/recolocar" (calcularRecolocacionKallax, con el conjunto = lo que ya había puesto
+// + lo nuevo) como "quitar" (con el conjunto = lo que ya había puesto MENOS el que se
+// quita), para que el resto cierre el hueco solo.
+function calcularColocacionKallaxParaIdxs(idxs) {
+  const ordenados = [...idxs].sort((ia, ib) => compareNatural(g(allData[ia], COL.catalog), g(allData[ib], COL.catalog)));
+  const total = ordenados.length;
+  const overflow = total > kallaxConfig.numHuecos * kallaxConfig.porHueco;
+  const moves = [];
+  ordenados.forEach((i, pos) => {
+    const posDesdeElFinal = total - 1 - pos; // 0 = la referencia más alta de todas (la "Z")
+    const huecoIdeal = Math.max(1, kallaxConfig.numHuecos - Math.floor(posDesdeElFinal / kallaxConfig.porHueco));
+    const huecoActual = g(allData[i], COL.kallax_slot);
+    if (String(huecoActual) !== String(huecoIdeal)) {
+      moves.push({ idx: i, from: huecoActual || null, to: huecoIdeal });
+    }
+  });
+  return { moves, overflow, total };
+}
+
+// Junta lo que ya había puesto en la Kallax con el/los nuevo(s) disco(s), y delega en
+// calcularColocacionKallaxParaIdxs el reparto (hueco 15 = referencias más altas, bajando
+// hacia el hueco 1). Solo devuelve los que de verdad cambian de hueco respecto a donde
+// están ahora (normalmente muy pocos, los que caen justo en el borde entre dos huecos).
 function calcularRecolocacionKallax(idxNuevoOVarios) {
   const nuevos = (Array.isArray(idxNuevoOVarios) ? idxNuevoOVarios : [idxNuevoOVarios])
     .filter(i => esCandidatoKallax(allData[i]));
   const idxSet = new Set();
   allData.forEach((r, i) => { if (esCandidatoKallax(r) && g(r, COL.kallax_slot)) idxSet.add(i); });
   nuevos.forEach(i => idxSet.add(i));
-  const idxs = [...idxSet];
-  idxs.sort((ia, ib) => compareNatural(g(allData[ia], COL.catalog), g(allData[ib], COL.catalog)));
-
-  const overflow = idxs.length > kallaxConfig.numHuecos * kallaxConfig.porHueco;
-  const moves = [];
-  idxs.forEach((i, pos) => {
-    const huecoIdeal = Math.max(1, kallaxConfig.numHuecos - Math.floor(pos / kallaxConfig.porHueco));
-    const huecoActual = g(allData[i], COL.kallax_slot);
-    if (String(huecoActual) !== String(huecoIdeal)) {
-      moves.push({ idx: i, from: huecoActual || null, to: huecoIdeal });
-    }
-  });
-  return { moves, overflow, total: idxs.length };
+  return calcularColocacionKallaxParaIdxs([...idxSet]);
 }
 
 async function colocarKallaxAutomatico(idx) {
@@ -6509,6 +6522,7 @@ function renderKallax(selectedSlot, onSelect) {
   // Contar cuántos discos hay ya en cada hueco (no solo si está ocupado o no)
   const counts = {};
   allData.forEach(r => {
+    if (!esCandidatoKallax(r)) return;
     const slot = g(r, COL.kallax_slot);
     if (slot) counts[slot] = (counts[slot] || 0) + 1;
   });
@@ -6679,15 +6693,29 @@ function setKallaxSlot(idx, slot) {
   saveToSheet(idx);
 }
 
-function quitarDeKallax(idx) {
+async function quitarDeKallax(idx) {
   const row = allData[idx];
   const huecoAnterior = g(row, COL.kallax_slot);
   if (!huecoAnterior) return;
+
+  // Recalculamos dónde va cada uno de los DEMÁS (sin contar este) — así cierran el hueco
+  // que deja libre solos, en cascada, sin pedir confirmación (igual que ya haces cuando se
+  // llena un hueco al añadir uno).
+  const idxsRestantes = [];
+  allData.forEach((r, i) => { if (i !== idx && esCandidatoKallax(r) && g(r, COL.kallax_slot)) idxsRestantes.push(i); });
+  const { moves } = calcularColocacionKallaxParaIdxs(idxsRestantes);
+
   row[COL.kallax_slot] = '';
+  moves.forEach(m => { allData[m.idx][COL.kallax_slot] = String(m.to); });
   selectedRow = row;
   renderView();
-  showToast(`✓ Quitado del hueco ${huecoAnterior}`);
-  saveToSheet(idx);
+
+  showToast(`Quitando del hueco ${huecoAnterior}${moves.length ? ` y recolocando ${moves.length} disco(s)...` : '...'}`, false, true);
+  await saveToSheet(idx);
+  for (const m of moves) {
+    await saveToSheet(m.idx);
+  }
+  showToast(`✓ Quitado del hueco ${huecoAnterior}${moves.length ? ` — ${moves.length} disco(s) recolocado(s) para cerrar el hueco` : ''}`);
 }
 
 // ─── SEARCH ──────────────────────────────────────────────────────────────────
