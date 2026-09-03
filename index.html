@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.23 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.24 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -319,7 +319,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.23</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.24</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -6497,6 +6497,25 @@ function renderTopMenu() {
 
 function renderTabsL1() {
   const el = document.getElementById('tabs-l1');
+
+  // Nivel top (justo tras elegir perfil, menú de las 3 secciones): pestañas de perfil,
+  // para poder saltar de Petrik a Paquillo/Juntos sin volver a la pantalla de selección.
+  if (!seccion) {
+    const center = Object.entries(PERFIL_NOMBRES).map(([id, nombre]) => `
+      <button class="vb-tab-l1 ${perfil === id ? 'active' : ''}" onclick="selectPerfil('${id}')">
+        <span class="dot"></span>${nombre}
+      </button>
+    `).join('');
+    el.innerHTML = `
+      <div class="vb-tabs-l1-side"></div>
+      <div class="vb-tabs-l1-center">${center}</div>
+      <div class="vb-tabs-l1-side vb-tabs-l1-side-right"></div>
+    `;
+    return;
+  }
+
+  // A partir de entrar en una sección (Colección/Herramientas/Redes), y en todo lo que
+  // cuelga de ella (listados, herramientas concretas...), las pestañas son de sección.
   const center = Object.entries(SECTIONS).map(([id, s]) => `
     <button class="vb-tab-l1 ${seccion === id ? 'active' : ''} ${s.construccion ? 'construccion' : ''}" onclick="setSeccion('${id}')">
       <span class="dot"></span>${s.label}${s.construccion ? '<span class="construccion-banner">en construcción</span>' : ''}
