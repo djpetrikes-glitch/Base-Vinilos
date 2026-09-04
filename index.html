@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.48 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.50 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -352,7 +352,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.48</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.50</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -2211,9 +2211,13 @@ async function confirmCortadorAssociation() {
       cortadorAssocData = null;
       cortadorValidatedTracks = {};
       guardarProgresoCortador();
-      await marcarRipeadosYColocarKallax(cortadorSessionDiscs);
-      cortadorListoParaAyudante = true; // por si el intento automático de abajo falla en silencio
+      // Esto se lanza YA, antes que nada más async — el navegador solo deja abrir un
+      // programa externo si el clic que lo origina sigue "reciente", y cada await de por
+      // medio (sobre todo el marcado de Ripeado/Limpio/Kallax de abajo, que tarda varios
+      // segundos por las llamadas al Sheet) consumía ese margen y lo dejaba caducar.
+      cortadorListoParaAyudante = true; // por si aun así falla en silencio
       abrirAyudanteCaratulas();
+      await marcarRipeadosYColocarKallax(cortadorSessionDiscs);
     }
   } catch(e) {
     console.error(e);
@@ -2324,6 +2328,20 @@ function abrirAyudanteAnadirSheet() {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+// Marca de un solo toque, desde la tarjeta del Cortador, los tres campos que siempre
+// tocaría poner a mano después en Vinilos tras un ripeo sin incidencias: estado físico
+// bien, formato WAV y limpio (con la fecha de hoy).
+async function marcarBienWavLimpio(idx) {
+  const row = allData[idx];
+  row[COL.estado_fisico] = 'Bien';
+  row[COL.formato_rip] = 'WAV';
+  row[COL.limpio] = 'Sí';
+  row[COL.fecha_limpieza] = new Date().toLocaleDateString('es-ES');
+  renderCortador();
+  showToast('Guardando: Bien · WAV · Limpio...', false, true);
+  await saveToSheet(idx);
 }
 
 async function createFolderForRow(idx) {
@@ -5382,6 +5400,7 @@ function renderCortadorWorkPanel() {
         ${titleHtml}
         <div style="margin-top:8px">${tracksHtml}</div>
         ${!entry.manual ? `<button class="btn" style="width:100%;justify-content:center;margin-top:8px;font-size:11px" onclick="createFolderForRow(${allData.indexOf(entry.row)})">📁 Crear carpeta de ripeo</button>` : ''}
+        ${!entry.manual ? `<button class="btn" style="width:100%;justify-content:center;margin-top:6px;font-size:11px" onclick="marcarBienWavLimpio(${allData.indexOf(entry.row)})">✓ Estado: Bien · WAV · Limpio</button>` : ''}
       </div>
     </div>`;
   }).join('');
