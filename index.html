@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.63 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.64 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -360,7 +360,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.63</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.64</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -7316,12 +7316,15 @@ function renderTabsL1() {
 // con "← Volver" por encima de la cuadrícula, para las pantallas que no son el menú raíz.
 function renderTileGrid(views, cabecera) {
   const accents = ['accent', 'blue', 'amber'];
+  // Con 4 pestañas se reparten 2 y 2 (en vez de forzar siempre 3 por fila, que con 4
+  // dejaba 3 arriba y 1 sola abajo). Con cualquier otra cantidad, sigue como antes.
+  const anchoTile = views.length === 4 ? 'calc((100% - 20px) / 2)' : 'calc((100% - 40px) / 3)';
   document.getElementById('main-content').innerHTML = `
     ${cabecera || ''}
     <div class="tool-menu">
       <div class="tool-menu-grid" style="display:flex;flex-wrap:wrap;justify-content:center">
         ${views.map((v, i) => `
-          <button class="tool-tile" style="flex:0 0 calc((100% - 40px) / 3)" data-accent="${accents[i % accents.length]}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
+          <button class="tool-tile" style="flex:0 0 ${anchoTile}" data-accent="${accents[i % accents.length]}" onclick="${v.action ? v.action + '()' : `setView('${v.id}')`}">
             ${TILE_BG_IMAGES[v.id] ? `<div class="tool-tile-bg" style="background-image:url(${TILE_BG_IMAGES[v.id]});filter:blur(${fotoBlur}px)"></div><div class="tool-tile-veil"></div>` : ''}
             <div class="tool-tile-content">
               <div class="tile-stamp">${v.stamp || '·'}</div>
