@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VinylBase v3.64 — Dj Petrik × Paquillo</title>
+<title>VinylBase v3.65 — Dj Petrik × Paquillo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
@@ -360,7 +360,7 @@
       </button>
       <div>
         <span class="eyebrow" id="headerEyebrow">VinylBase</span>
-        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.64</span></h1>
+        <h1>Vinyl<span class="accent-txt">Base</span><span class="version-badge" id="versionBadge">v3.65</span></h1>
       </div>
     </div>
     <div class="header-perfil-name" id="headerPerfilName"></div>
@@ -4922,6 +4922,12 @@ function renderDetail(row) {
         <div class="ripper-opt ${ripper.toLowerCase().includes('paquillo')?'on-paquillo':''}" onclick="setRipper(${allData.indexOf(row)},'Paquillo')">Paquillo</div>
       </div>
 
+      <div class="d-label" style="margin-bottom:4px;margin-top:10px">¿De quién es este disco?</div>
+      <div class="ripper-sel">
+        <div class="ripper-opt ${(g(row,COL.propietario)||'').toLowerCase()!=='paquillo'?'on-you':''}" onclick="setPropietario(${allData.indexOf(row)},'')">Tú (DJ Petrik)</div>
+        <div class="ripper-opt ${(g(row,COL.propietario)||'').toLowerCase()==='paquillo'?'on-paquillo':''}" onclick="setPropietario(${allData.indexOf(row)},'Paquillo')">Paquillo</div>
+      </div>
+
       <div class="d-field" style="margin-top:8px">
         <span class="d-label">Formato del rip</span>
       </div>
@@ -6062,6 +6068,13 @@ function setRipper(idx, who) {
   saveToSheet(idx);
 }
 
+function setPropietario(idx, who) {
+  allData[idx][COL.propietario] = who;
+  selectedRow = allData[idx];
+  renderView();
+  saveToSheet(idx);
+}
+
 function setDigitalEstado(idx, estado) {
   const current = allData[idx][COL.digital_estado];
   const cleared = current === estado;
@@ -6230,6 +6243,7 @@ async function saveToSheet(idx) {
     { col: COL.limpio,         value: row[COL.limpio]         || '' },
     { col: COL.fecha_limpieza, value: row[COL.fecha_limpieza] || '' },
     { col: COL.limpieza_profunda, value: row[COL.limpieza_profunda] || '' },
+    { col: COL.propietario,    value: row[COL.propietario]    || '' },
     { col: COL.format,         value: row[COL.format]         || '' },
     { col: COL.fuente,         value: row[COL.fuente]         || '' },
   ];
@@ -6374,6 +6388,10 @@ async function addRecord() {
   // encontrar su carátula, ni aparecer en el buscador del Cortador, ni aceptar que le
   // arrastres una carátula a mano encima. Es justo lo que te estaba fallando.
   if (releaseIdLimpio) row[COL.release_id] = releaseIdLimpio + '0';
+  // Sin esto, un disco nuevo se queda con Propietario en blanco (= "de Petrik" por
+  // defecto en ownerMatchesPerfil), da igual quién lo añada — así, si es Paquillo quien
+  // lo añade, le sale en su propia lista de Vinilos y no en la de Petrik.
+  if (perfil === 'paquillo') row[COL.propietario] = 'Paquillo';
 
   allData.unshift(row);
   closeModal();
